@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -56,6 +57,10 @@ MODEL_INFO = Gauge(
 
 MONITORED_FEATURES = ("age", "trestbps", "chol", "thalach", "oldpeak")
 
+# Container / pod name: shows which replica handled a request when several run behind
+# a Kubernetes Service.
+INSTANCE = socket.gethostname()
+
 
 def metrics_payload() -> bytes:
     return generate_latest(REGISTRY)
@@ -86,6 +91,7 @@ class JsonFormatter(logging.Formatter):
             "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
+            "instance": INSTANCE,
             "message": record.getMessage(),
         }
         entry.update(getattr(record, "fields", {}) or {})

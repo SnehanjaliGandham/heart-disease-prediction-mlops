@@ -7,7 +7,8 @@ BITS Pilani WILP · M.Tech AIML · MLOps (AIMLCZG523) Assignment 01
 End-to-end, reproducible ML pipeline for predicting heart disease from the
 UCI Heart Disease (Cleveland) dataset: data acquisition → EDA → feature
 engineering → model training & tuning → MLflow tracking → packaged model →
-automated tests and CI/CD → containerised prediction API (Kubernetes and monitoring in later stages).
+automated tests and CI/CD → containerised prediction API → Kubernetes deployment with autoscaling
+(monitoring in a later stage).
 
 ## Project structure
 
@@ -17,6 +18,7 @@ scripts/download_data.py   downloads the dataset from UCI and verifies it agains
 scripts/check_env.py       checks a machine (e.g. Prayogshala) can run the project
 scripts/quality_gate.py    blocks a model that falls below minimum metric standards
 scripts/smoke_test.py      end-to-end checks against a running API (Docker / Kubernetes)
+scripts/load_test.py       concurrent traffic generator: throughput, latency percentiles, errors
 src/
   config.py                paths, feature lists, constants (single source of truth)
   data.py                  load, validate, clean, split
@@ -34,7 +36,8 @@ models/                    packaged champion model (+ MLflow format, metadata)
 reports/                   model comparison table and figures for the report
 samples/                   example request bodies (high/low risk, missing values, invalid, batch)
 tests/                     pytest unit and API tests (Task 5)
-.github/workflows/ci.yml   CI/CD pipeline: lint -> tests (Py 3.10-3.13) -> train + quality gate -> Docker
+.github/workflows/ci.yml   CI/CD pipeline: lint -> tests (Py 3.10-3.13) -> train + quality gate -> Docker -> Kubernetes
+deployment/k8s/            Kubernetes manifests (Deployment, LoadBalancer Service, HPA, PDB, ConfigMap) (Task 7)
 Dockerfile                 multi-stage, non-root image for the API (Task 6)
 docker-compose.yml         one-command local run of the API
 requirements-serve.txt     the only packages the API image installs
@@ -99,6 +102,7 @@ Every push and pull request to `main` runs the GitHub Actions pipeline:
 | 2 · Unit tests | pytest on Python 3.10, 3.11, 3.12 and 3.13 with coverage | any test fails or coverage < 90 % |
 | 3 · Train | verify data checksum → clean → train + MLflow → quality gate → inference smoke test → packaged-model tests → execute notebooks | any step errors or the model misses the quality gate |
 | 4 · Docker | build the image with the model trained in job 3 → start the container → smoke test → wait for HEALTHCHECK = healthy → check it runs as non-root → push to GitHub Container Registry (pushes to `main` only) | build fails, any smoke check fails or the container is unhealthy |
+| 5 · Kubernetes | create a temporary cluster (kind) → `kubectl apply -k deployment/k8s` → wait for the rollout → smoke test through the Service → delete a pod and check it is replaced → rolling update | a manifest is invalid, pods never become ready, a smoke check fails or self-healing / rollout fails |
 
 Each job uploads its results as artifacts (lint report, JUnit/coverage reports, packaged
 model, MLflow store, logs, executed notebooks) and writes a summary to the run page.
@@ -140,6 +144,47 @@ Design points:
 * **Image** – multi-stage build, only the serving packages (no MLflow, Jupyter or plotting),
   runs as non-root user 10001 with read-only code and model, Docker `HEALTHCHECK` on `/ready`.
 * **Configuration** – `PREDICTION_THRESHOLD` (default 0.5), `LOG_LEVEL`, `MODEL_PATH`.
+
+## Kubernetes deployment
+
+`deployment/k8s/` deploys the same image to any Kubernetes cluster. Tested on Docker Desktop's
+built-in Kubernetes, and on a temporary kind cluster in CI (job 5).
+
+```bash
+docker build -t heart-disease-api:1.0.0 .         # Docker Desktop's Kubernetes uses this image directly
+kubectl apply -k deployment/k8s                    # namespace, config, deployment, service, autoscaler, PDB
+kubectl -n heart-disease rollout status deployment/heart-disease-api
+kubectl -n heart-disease get all
+python scripts/smoke_test.py --url http://localhost:8080
+```
+
+| Object | Purpose |
+|---|---|
+| `Deployment` | 2 replicas; rolling updates that never reduce capacity (`maxSurge 1`, `maxUnavailable 0`) and a 5 s `preStop` delay so no request is dropped while a pod shuts down |
+| Probes | *startup* and *readiness* on `/ready` (traffic only reaches pods with a loaded model), *liveness* on `/health` (a hung process is restarted) |
+| `Service` (LoadBalancer) | one address for all ready pods – `http://localhost:8080` on Docker Desktop, a public IP on a cloud cluster |
+| `HorizontalPodAutoscaler` | 2–5 pods, adds pods above 60 % CPU (needs metrics-server) |
+| `PodDisruptionBudget` | node maintenance can never take the last pod down |
+| `ConfigMap` | decision threshold and log level, changeable without rebuilding the image |
+| Security | non-root user 10001, read-only root filesystem, all Linux capabilities dropped, no privilege escalation, seccomp `RuntimeDefault`, no service-account token |
+| Resources | requests 100m CPU / 192 Mi, limits 1 CPU / 512 Mi (idle use ≈ 125 Mi) |
+
+The autoscaler needs metrics-server, which Docker Desktop does not include:
+`kubectl apply -k deployment/metrics-server` (then `kubectl top pods -n heart-disease` works).
+
+Operations demonstrated (see the report for screenshots):
+
+```bash
+kubectl -n heart-disease delete pod <pod-name>                      # self-healing: a replacement starts
+python scripts/load_test.py --url http://localhost:8080 --duration 180 --workers 16
+kubectl -n heart-disease get hpa -w                                 # autoscaling 2 -> 5 pods under load
+kubectl -n heart-disease rollout restart deployment/heart-disease-api   # zero-downtime rolling update
+kubectl -n heart-disease set image deployment/heart-disease-api api=heart-disease-api:broken
+kubectl -n heart-disease rollout undo deployment/heart-disease-api       # failed release -> rollback
+```
+
+To run the published image instead of a local build:
+`kubectl -n heart-disease set image deployment/heart-disease-api api=ghcr.io/snehanjaligandham/heart-disease-api:latest`.
 
 ## Results so far
 

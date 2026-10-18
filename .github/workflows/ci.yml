@@ -1,14 +1,18 @@
 # CI/CD pipeline for the heart disease MLOps project.
 #
-#   1 Lint ─► 2 Unit tests (Py 3.10–3.13) ─► 3 Train, track, gate & package ─► 4 Docker image
+#   1 Lint ─► 2 Unit tests (Py 3.10–3.13) ─► 3 Train, track, gate & package
+#     ─► 4 Docker image ─► 5 Kubernetes deployment test
 #
 # Job 4 builds the API image around the model that job 3 just trained and gated,
 # runs it, smoke-tests every endpoint and - on pushes to main - publishes it to the
 # GitHub Container Registry (ghcr.io).
+# Job 5 deploys that image with the manifests in deployment/k8s to a temporary
+# Kubernetes cluster (kind), smoke-tests it through the Service and checks that a
+# deleted pod is replaced and that a rolling update completes.
 #
 # Every job depends on the previous one, so any failure (lint error, failing test,
-# model below the quality gate) stops the pipeline with a red status. Each job
-# uploads its logs/results as artifacts, even when it fails.
+# model below the quality gate, broken image or manifest) stops the pipeline with a
+# red status. Each job uploads its logs/results as artifacts, even when it fails.
 
 name: CI/CD pipeline
 
@@ -292,3 +296,108 @@ jobs:
             docker push "$image:$tag"
           done
           echo "Published \`$image:$short_sha\` and \`$image:latest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------- 5. kubernetes
+  kubernetes:
+    name: "5 · Deploy to Kubernetes (kind) & smoke-test"
+    needs: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NS: heart-disease
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Use the model trained and gated in job 3
+        uses: actions/download-artifact@v7
+        with:
+          name: model-and-mlflow
+          path: trained
+
+      - name: Build the image (same Dockerfile and model as job 4)
+        run: |
+          cp "$(find trained -name heart_disease_model.joblib | head -1)" models/
+          cp "$(find trained -name model_metadata.json | head -1)" models/
+          docker build -q -t heart-disease-api:1.0.0 .
+
+      - name: Validate the manifests
+        run: |
+          kubectl kustomize deployment/k8s > rendered.yaml
+          grep -E "^kind:" rendered.yaml | sort | uniq -c
+
+      - name: Create a Kubernetes cluster (kind)
+        run: |
+          # pinned kind release -> Kubernetes v1.33 node image, the same every run
+          curl -sSLo kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
+          sudo install kind /usr/local/bin/kind
+          kind version
+          kind create cluster --name heart --wait 180s
+          kind load docker-image heart-disease-api:1.0.0 --name heart
+          kubectl get nodes -o wide
+
+      - name: Deploy
+        run: |
+          kubectl apply -k deployment/k8s
+          kubectl -n "$NS" rollout status deployment/heart-disease-api --timeout=180s
+          kubectl -n "$NS" get deploy,pods,svc,hpa,pdb -o wide
+
+      - name: Smoke-test through the Service
+        run: |
+          kubectl -n "$NS" port-forward service/heart-disease-api 8080:8080 > port-forward.log 2>&1 &
+          python3 scripts/smoke_test.py --url http://localhost:8080 --wait 60 | tee k8s-smoke-test.log
+
+      - name: Self-healing - a deleted pod is replaced
+        run: |
+          pod=$(kubectl -n "$NS" get pods -l app.kubernetes.io/name=heart-disease-api -o jsonpath='{.items[0].metadata.name}')
+          kubectl -n "$NS" delete pod "$pod"
+          kubectl -n "$NS" wait deployment/heart-disease-api \
+            --for=jsonpath='{.status.readyReplicas}'=2 --timeout=120s
+          kubectl -n "$NS" get pods -o wide
+          if kubectl -n "$NS" get pod "$pod" >/dev/null 2>&1; then
+            echo "Deleted pod still exists"; exit 1
+          fi
+          echo "Deleted $pod - Kubernetes replaced it and 2 replicas are ready again"
+
+      - name: Rolling update completes
+        run: |
+          kubectl -n "$NS" rollout restart deployment/heart-disease-api
+          kubectl -n "$NS" rollout status deployment/heart-disease-api --timeout=180s
+          kubectl -n "$NS" rollout history deployment/heart-disease-api
+
+      - name: Add deployment summary
+        if: always()
+        run: |
+          {
+            echo "### Kubernetes deployment (kind)"
+            echo '```'
+            kubectl -n "$NS" get deploy,pods,svc -o wide 2>&1 || true
+            echo
+            grep -E "^\[|All checks|failed" k8s-smoke-test.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect cluster diagnostics
+        if: always()
+        run: |
+          {
+            kubectl -n "$NS" describe deployment heart-disease-api
+            kubectl -n "$NS" describe pods
+            kubectl -n "$NS" get events --sort-by=.lastTimestamp
+            kubectl -n "$NS" logs -l app.kubernetes.io/name=heart-disease-api --prefix --tail=50
+          } > k8s-diagnostics.log 2>&1 || true
+
+      - name: Upload Kubernetes logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: kubernetes-logs
+          path: |
+            rendered.yaml
+            k8s-smoke-test.log
+            k8s-diagnostics.log
+            port-forward.log
+          if-no-files-found: ignore
+
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name heart || true

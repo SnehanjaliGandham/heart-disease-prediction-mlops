@@ -25,5 +25,6 @@ jupyter==1.1.1
 
 # testing
 pytest==9.1.1
+pyyaml==6.0.3
 pytest-cov==7.1.0
 ruff==0.17.1

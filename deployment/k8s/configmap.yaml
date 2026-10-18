@@ -1,0 +1,12 @@
+# Runtime settings for the API. Change a value, re-apply, then
+# `kubectl rollout restart deployment/heart-disease-api -n heart-disease`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heart-disease-api-config
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-disease-api
+data:
+  PREDICTION_THRESHOLD: "0.5"
+  LOG_LEVEL: "INFO"

@@ -1,0 +1,17 @@
+# LoadBalancer: on Docker Desktop this is published on the host at http://localhost:8080
+# (on a cloud cluster it gets a public IP). Load-balances across all ready pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: heart-disease-api
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-disease-api
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: heart-disease-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

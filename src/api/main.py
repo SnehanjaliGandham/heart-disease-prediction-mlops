@@ -213,6 +213,7 @@ def create_app(model_path: Optional[Path] = None) -> FastAPI:
             "sklearn_version": meta.get("sklearn_version"),
             "decision_threshold": request.app.state.threshold,
             "features": config.FEATURES,
+            "served_by": obs.INSTANCE,
         }
 
     @app.post("/predict", response_model=PredictionResponse, tags=["prediction"],

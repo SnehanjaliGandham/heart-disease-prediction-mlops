@@ -74,6 +74,7 @@ def test_model_info(client):
     assert info["decision_threshold"] == 0.5
     assert info["features"] == config.FEATURES
     assert info["test_metrics"]["test_roc_auc"] > 0.85
+    assert info["served_by"] == obs.INSTANCE
 
 
 def test_openapi_docs_are_published(client):
@@ -210,6 +211,7 @@ def test_logs_are_json_and_contain_no_patient_data(client, caplog):
     for record in records:
         line = obs.JsonFormatter().format(record)
         entry = json.loads(line)               # every line is valid JSON
+        assert entry["instance"] == obs.INSTANCE
         assert "286.5" not in line and "chol" not in entry
     request_log = next(r for r in records if r.fields["event"] == "request")
     assert request_log.fields["status"] == 200 and request_log.fields["duration_ms"] >= 0

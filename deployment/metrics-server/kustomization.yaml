@@ -1,0 +1,17 @@
+# metrics-server: supplies the CPU/memory figures that `kubectl top` and the
+# HorizontalPodAutoscaler need. Docker Desktop's Kubernetes does not include it.
+#   kubectl apply -k deployment/metrics-server
+# --kubelet-insecure-tls is needed on single-node dev clusters (Docker Desktop, kind)
+# whose kubelet certificates are self-signed. Do not use it on a production cluster.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.8.0/components.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: metrics-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kubelet-insecure-tls

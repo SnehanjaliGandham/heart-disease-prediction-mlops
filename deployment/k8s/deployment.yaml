@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heart-disease-api
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-disease-api
+    app.kubernetes.io/component: model-server
+    app.kubernetes.io/part-of: heart-disease-prediction
+spec:
+  replicas: 2                        # the HPA scales between 2 and 5
+  revisionHistoryLimit: 5            # keeps old versions for `kubectl rollout undo`
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heart-disease-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                    # start one new pod at a time ...
+      maxUnavailable: 0              # ... and never drop below full capacity
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heart-disease-api
+        app.kubernetes.io/component: model-server
+      annotations:
+        # lets Prometheus discover and scrape every pod (Step 8)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false     # the API never talks to Kubernetes
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Built locally with `docker build -t heart-disease-api:1.0.0 .`; Docker Desktop's
+          # Kubernetes uses the same image store. CI swaps in the GHCR image (kustomize).
+          image: heart-disease-api:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: heart-disease-api-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:                  # what the scheduler reserves (and the HPA % base)
+              cpu: 100m
+              memory: 192Mi
+            limits:                    # measured idle use is ~125 MiB
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:                # allow up to 60 s for the model to load
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:              # only send traffic to pods with a loaded model
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:               # restart a pod whose process has hung
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            # On shutdown, keep serving for 5 s while the Service stops routing to this pod,
+            # so rolling updates and scale-downs drop no requests.
+            preStop:
+              sleep:
+                seconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
