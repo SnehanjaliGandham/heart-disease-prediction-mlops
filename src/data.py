@@ -50,7 +50,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     """
     validate_schema(df, config.RAW_TARGET)
     out = df.drop_duplicates().copy()
-    out[config.TARGET] = (out[config.RAW_TARGET] > 0).astype(int)
+    out[config.TARGET] = (out[config.RAW_TARGET] > 1).astype(int)
     out = out.drop(columns=[config.RAW_TARGET])
     return out.reset_index(drop=True)   # original UCI column order, target last
 
