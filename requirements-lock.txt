@@ -9,6 +9,12 @@ joblib==1.6.0
 skops==0.16.0
 ucimlrepo==0.0.7
 
+# prediction API (Step 6)
+fastapi==0.143.3
+uvicorn==0.54.0
+prometheus-client==0.26.0
+httpx==0.28.1
+
 # experiment tracking
 mlflow==3.17.1
 

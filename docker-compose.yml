@@ -1,0 +1,13 @@
+# Run the API with one command:   docker compose up --build
+# (Step 8 adds Prometheus and Grafana to this file.)
+services:
+  api:
+    build: .
+    image: heart-disease-api:1.0.0
+    container_name: heart-api
+    ports:
+      - "8000:8000"
+    environment:
+      PREDICTION_THRESHOLD: "0.5"
+      LOG_LEVEL: "INFO"
+    restart: unless-stopped

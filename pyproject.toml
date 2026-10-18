@@ -11,6 +11,11 @@ extend-exclude = ["notebooks", ".venv"]
 select = ["E", "W", "F", "I", "B", "UP"]
 ignore = ["E402"]   # matplotlib.use("Agg") must run before pyplot is imported
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI/pydantic evaluate type hints at runtime, so the API keeps Optional[...] / List[...]
+# (the X | None syntax would break on Python 3.9).
+"src/api/*" = ["UP006", "UP035", "UP045"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 
@@ -22,6 +27,7 @@ filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::FutureWarning",
     "ignore::UserWarning:mlflow.*",
+    "ignore:Using `httpx` with `starlette.testclient`",
 ]
 
 [tool.coverage.run]

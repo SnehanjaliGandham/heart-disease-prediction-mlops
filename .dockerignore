@@ -1,0 +1,8 @@
+# Allow-list: the image needs only the serving code, the packaged model and its requirements.
+*
+!src/
+!models/heart_disease_model.joblib
+!models/model_metadata.json
+!requirements-serve.txt
+**/__pycache__
+**/*.pyc

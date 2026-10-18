@@ -1,0 +1,11 @@
+# Runtime dependencies of the prediction API only (used by the Dockerfile).
+# Same versions as requirements-lock.txt: a saved scikit-learn model must be loaded
+# with the exact scikit-learn version that trained it. No MLflow / Jupyter / plotting.
+numpy==2.5.4
+pandas==3.0.6
+scipy==1.18.1
+scikit-learn==1.9.1
+joblib==1.6.0
+fastapi==0.143.3
+uvicorn==0.54.0
+prometheus-client==0.26.0

@@ -1,7 +1,10 @@
 # CI/CD pipeline for the heart disease MLOps project.
 #
-#   1 Lint ──► 2 Unit tests (Python 3.10–3.13) ──► 3 Train, track, gate & package
-#   (Step 6 adds: 4 Build the Docker image and smoke-test the API)
+#   1 Lint ─► 2 Unit tests (Py 3.10–3.13) ─► 3 Train, track, gate & package ─► 4 Docker image
+#
+# Job 4 builds the API image around the model that job 3 just trained and gated,
+# runs it, smoke-tests every endpoint and - on pushes to main - publishes it to the
+# GitHub Container Registry (ghcr.io).
 #
 # Every job depends on the previous one, so any failure (lint error, failing test,
 # model below the quality gate) stops the pipeline with a red status. Each job
@@ -201,3 +204,91 @@ jobs:
             logs/
             executed_notebooks/
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- 4. docker
+  docker:
+    name: "4 · Build, smoke-test & publish Docker image"
+    needs: train
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write          # push to ghcr.io with the built-in GITHUB_TOKEN
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Use the model trained and gated in job 3
+        uses: actions/download-artifact@v7
+        with:
+          name: model-and-mlflow
+          path: trained
+
+      - name: Put the new model in place
+        run: |
+          cp "$(find trained -name heart_disease_model.joblib | head -1)" models/
+          cp "$(find trained -name model_metadata.json | head -1)" models/
+          python3 -c "import json; m = json.load(open('models/model_metadata.json')); print('Packaging', m['model_name'], 'git', m.get('git_commit'))"
+
+      - name: Build image
+        run: |
+          docker build -t heart-disease-api:ci . 2>&1 | tee docker-build.log
+          docker image ls heart-disease-api:ci --format 'Image size: {{.Size}}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Run container
+        run: docker run -d -p 8000:8000 --name heart-api heart-disease-api:ci
+
+      - name: Smoke-test the running API
+        run: python3 scripts/smoke_test.py --url http://localhost:8000 --wait 60 | tee smoke-test.log
+
+      - name: Check health status and non-root user
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' heart-api)
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          echo "Docker health status: $status"
+          [ "$status" = "healthy" ]
+          user=$(docker exec heart-api id -u)
+          echo "Container runs as uid $user"
+          [ "$user" != "0" ]
+
+      - name: Add container summary
+        if: always()
+        run: |
+          {
+            echo "### Docker image"
+            echo '```'
+            grep -E "^\[|All checks|failed" smoke-test.log || true
+            echo '```'
+            echo "Health: $(docker inspect --format '{{.State.Health.Status}}' heart-api 2>/dev/null) · user id: $(docker exec heart-api id -u 2>/dev/null)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect container logs
+        if: always()
+        run: docker logs heart-api > container.log 2>&1 || true
+
+      - name: Upload build and container logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-logs
+          path: |
+            docker-build.log
+            smoke-test.log
+            container.log
+          if-no-files-found: ignore
+
+      - name: Publish image to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          image="ghcr.io/${OWNER,,}/heart-disease-api"        # registry names must be lowercase
+          short_sha="${GITHUB_SHA::7}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for tag in "$short_sha" latest; do
+            docker tag heart-disease-api:ci "$image:$tag"
+            docker push "$image:$tag"
+          done
+          echo "Published \`$image:$short_sha\` and \`$image:latest\`" >> "$GITHUB_STEP_SUMMARY"
