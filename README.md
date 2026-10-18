@@ -29,7 +29,7 @@ notebooks/
   02_model_development.ipynb      Tasks 2–4 – features, models, MLflow, packaging
 models/                    packaged champion model (+ MLflow format, metadata)
 reports/                   model comparison table and figures for the report
-tests/                     95 pytest unit tests, 98 % coverage (Task 5)
+tests/                     95 pytest unit tests, 97 % coverage (Task 5)
 .github/workflows/ci.yml   CI/CD pipeline: lint -> tests (Py 3.10-3.13) -> train + quality gate
 deployment/                Docker / Kubernetes files (Tasks 6–7)
 screenshots/               evidence for the report
