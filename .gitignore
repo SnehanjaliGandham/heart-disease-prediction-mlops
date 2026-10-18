@@ -1,0 +1,19 @@
+# environments
+.venv/
+.env
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# MLflow local tracking store (re-created by `python -m src.train`)
+mlruns/
+mlflow.db
+mlartifacts/
+
+# scratch
+*_bkp.ipynb
+.DS_Store
+_to_delete/
