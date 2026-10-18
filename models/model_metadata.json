@@ -1,0 +1,58 @@
+{
+  "model_name": "logistic_regression",
+  "model_class": "LogisticRegression",
+  "best_params": {
+    "C": 0.1,
+    "class_weight": null,
+    "l1_ratio": 0.0
+  },
+  "selection_metric": "cv_roc_auc_mean",
+  "cv_metrics": {
+    "cv_accuracy_mean": 0.8511,
+    "cv_accuracy_std": 0.025,
+    "cv_precision_mean": 0.8776,
+    "cv_precision_std": 0.0606,
+    "cv_recall_mean": 0.7921,
+    "cv_recall_std": 0.0482,
+    "cv_f1_mean": 0.8299,
+    "cv_f1_std": 0.026,
+    "cv_roc_auc_mean": 0.9113,
+    "cv_roc_auc_std": 0.018
+  },
+  "test_metrics": {
+    "test_accuracy": 0.8852,
+    "test_precision": 0.8387,
+    "test_recall": 0.9286,
+    "test_f1": 0.8814,
+    "test_roc_auc": 0.961
+  },
+  "features": {
+    "numeric": [
+      "age",
+      "trestbps",
+      "chol",
+      "thalach",
+      "oldpeak",
+      "ca"
+    ],
+    "categorical": [
+      "sex",
+      "cp",
+      "fbs",
+      "restecg",
+      "exang",
+      "slope",
+      "thal"
+    ]
+  },
+  "target": "1 = heart disease present (num > 0), 0 = absent",
+  "mlflow_run_id": "227189b25e3a49fb9570b9abc2b80cac",
+  "training_data_sha256": "2c47d9ee8b2e0d30e81c113a079baec0bb3814b1cef093e675610de45df54ffc",
+  "trained_at_utc": "2026-10-18T11:43:39+00:00",
+  "python_version": "3.13.5",
+  "sklearn_version": "1.9.1",
+  "figures": {
+    "roc": "reports\\figures\\roc_curves.png",
+    "confusion_matrix": "reports\\figures\\confusion_matrix_best.png"
+  }
+}

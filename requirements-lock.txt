@@ -1,0 +1,21 @@
+# EXACT versions the project was developed and tested with (needs Python >= 3.12).
+# Use this for a bit-for-bit reproduction:  pip install -r requirements-lock.txt
+
+# data + modelling
+numpy==2.5.4
+pandas==3.0.6
+scikit-learn==1.9.1
+joblib==1.6.0
+skops==0.16.0
+ucimlrepo==0.0.7
+
+# experiment tracking
+mlflow==3.17.1
+
+# plots / notebooks
+matplotlib==3.11.2
+seaborn==0.13.2
+jupyter==1.1.1
+
+# testing
+pytest==9.1.1
