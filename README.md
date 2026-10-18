@@ -2,17 +2,20 @@
 
 BITS Pilani WILP · M.Tech AIML · MLOps (AIMLCZG523) Assignment 01
 
+[![CI/CD pipeline](https://github.com/SnehanjaliGandham/heart-disease-prediction-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/SnehanjaliGandham/heart-disease-prediction-mlops/actions/workflows/ci.yml)
+
 End-to-end, reproducible ML pipeline for predicting heart disease from the
 UCI Heart Disease (Cleveland) dataset: data acquisition → EDA → feature
 engineering → model training & tuning → MLflow tracking → packaged model →
-(CI/CD, Docker, Kubernetes and monitoring in later stages).
+automated tests and CI/CD (Docker, Kubernetes and monitoring in later stages).
 
 ## Project structure
 
 ```
-data/                      raw + cleaned CSV, UCI variable descriptions
-scripts/download_data.py   downloads the dataset from the UCI repository
+data/                      raw + cleaned CSV, UCI variable descriptions, SHA-256 manifest
+scripts/download_data.py   downloads the dataset from UCI and verifies it against the manifest
 scripts/check_env.py       checks a machine (e.g. Prayogshala) can run the project
+scripts/quality_gate.py    blocks a model that falls below minimum metric standards
 src/
   config.py                paths, feature lists, constants (single source of truth)
   data.py                  load, validate, clean, split
@@ -26,7 +29,8 @@ notebooks/
   02_model_development.ipynb      Tasks 2–4 – features, models, MLflow, packaging
 models/                    packaged champion model (+ MLflow format, metadata)
 reports/                   model comparison table and figures for the report
-tests/                     unit tests (Task 5)
+tests/                     95 pytest unit tests, 98 % coverage (Task 5)
+.github/workflows/ci.yml   CI/CD pipeline: lint -> tests (Py 3.10-3.13) -> train + quality gate
 deployment/                Docker / Kubernetes files (Tasks 6–7)
 screenshots/               evidence for the report
 ```
@@ -65,7 +69,31 @@ python -m src.predict                # 4. score a sample patient with the saved 
 mlflow ui --backend-store-uri sqlite:///mlflow.db   # 5. browse runs at http://127.0.0.1:5000
 ```
 
-`python -m src.train --quick` runs with small grids (used in CI).
+`python -m src.train --quick` runs with small grids (handy for quick local checks).
+
+## Testing and CI/CD
+
+```bash
+ruff check .                                   # lint
+python -m pytest --cov                         # 95 tests, coverage report
+python scripts/quality_gate.py                 # check the trained model meets minimum standards
+```
+
+The tests run offline in under a minute. They cover data validation and cleaning, the
+preprocessing (including a leakage guard), every hyper-parameter grid, metrics and plots,
+an end-to-end training run with checks on what MLflow recorded and on the model registry,
+inference, and the helper scripts.
+
+Every push and pull request to `main` runs the GitHub Actions pipeline:
+
+| Job | What it does | Fails when |
+|---|---|---|
+| 1 · Lint | `ruff` static checks | style or likely-bug findings |
+| 2 · Unit tests | pytest on Python 3.10, 3.11, 3.12 and 3.13 with coverage | any test fails or coverage < 90 % |
+| 3 · Train | verify data checksum → clean → train + MLflow → quality gate → inference smoke test → packaged-model tests → execute notebooks | any step errors or the model misses the quality gate |
+
+Each job uploads its results as artifacts (lint report, JUnit/coverage reports, packaged
+model, MLflow store, logs, executed notebooks) and writes a summary to the run page.
 
 ## Results so far
 

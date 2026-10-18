@@ -1,0 +1,203 @@
+# CI/CD pipeline for the heart disease MLOps project.
+#
+#   1 Lint ──► 2 Unit tests (Python 3.10–3.13) ──► 3 Train, track, gate & package
+#   (Step 6 adds: 4 Build the Docker image and smoke-test the API)
+#
+# Every job depends on the previous one, so any failure (lint error, failing test,
+# model below the quality gate) stops the pipeline with a red status. Each job
+# uploads its logs/results as artifacts, even when it fails.
+
+name: CI/CD pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:          # manual "Run workflow" button
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+defaults:
+  run:
+    shell: bash               # GitHub runs this as `bash -eo pipefail`: any error stops the step
+
+jobs:
+  # ---------------------------------------------------------------- 1. lint
+  lint:
+    name: "1 · Lint (ruff)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install "ruff>=0.6"
+
+      - name: Lint source, scripts and tests
+        run: |
+          mkdir -p logs
+          ruff check --output-format=github .
+          ruff check --statistics . | tee logs/lint-report.txt
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lint-report
+          path: logs/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- 2. tests
+  test:
+    name: "2 · Unit tests (Python ${{ matrix.python-version }})"
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false        # show results for every Python version
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify dataset checksum
+        run: python scripts/download_data.py --verify
+
+      - name: Run tests with coverage
+        run: |
+          mkdir -p test-results
+          python -m pytest \
+            --cov --cov-report=term --cov-report=xml:test-results/coverage.xml \
+            --cov-report=html:test-results/htmlcov --cov-fail-under=90 \
+            --junitxml=test-results/junit.xml | tee test-results/pytest.log
+
+      - name: Add test summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET, pathlib
+          junit, cov = pathlib.Path("test-results/junit.xml"), pathlib.Path("test-results/coverage.xml")
+          print("### Unit tests - Python ${{ matrix.python-version }}")
+          if junit.exists():
+              s = ET.parse(junit).getroot().find("testsuite")
+              total, fail, err, skip = (int(s.get(k)) for k in ("tests", "failures", "errors", "skipped"))
+              print(f"- Tests: **{total - fail - err - skip} passed**, {fail} failed, {err} errors, {skip} skipped")
+          if cov.exists():
+              print(f"- Line coverage: **{float(ET.parse(cov).getroot().get('line-rate')) * 100:.1f} %**")
+          EOF
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results-py${{ matrix.python-version }}
+          path: test-results/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- 3. train
+  train:
+    name: "3 · Train, track, gate & package model"
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install exact (locked) dependencies
+        run: pip install -r requirements-lock.txt
+
+      - name: Acquire and verify data
+        run: |
+          mkdir -p logs
+          python scripts/download_data.py 2>&1 | tee logs/01_data.log
+          python -m src.data 2>&1 | tee -a logs/01_data.log
+
+      - name: Train, tune and log to MLflow
+        run: python -m src.train 2>&1 | tee logs/02_train.log
+
+      - name: Model quality gate
+        run: python scripts/quality_gate.py 2>&1 | tee logs/03_quality_gate.log
+
+      - name: Inference smoke test with the packaged model
+        run: python -m src.predict 2>&1 | tee logs/04_predict.log
+
+      - name: Packaged-model tests (locked versions, freshly trained model)
+        run: python -m pytest -q tests/test_predict.py 2>&1 | tee logs/05_packaged_model_tests.log
+
+      - name: Execute notebooks end-to-end
+        run: |
+          jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=900 \
+            --output-dir executed_notebooks notebooks/*.ipynb 2>&1 | tee logs/06_notebooks.log
+
+      - name: Add training summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib, pandas as pd
+          table = pathlib.Path("reports/model_comparison.csv")
+          meta = pathlib.Path("models/model_metadata.json")
+          if table.exists():
+              df = pd.read_csv(table)
+              cols = ["model", "cv_roc_auc_mean", "cv_roc_auc_std", "cv_accuracy_mean",
+                      "test_roc_auc", "test_accuracy", "test_recall"]
+              print("### Model comparison (selected on CV ROC-AUC)\n")
+              print("| " + " | ".join(cols) + " |\n|" + "---|" * len(cols))
+              for _, r in df[cols].iterrows():
+                  print("| " + " | ".join(str(r[c]) for c in cols) + " |")
+          if meta.exists():
+              m = json.loads(meta.read_text())
+              print(f"\n**Selected:** `{m['model_name']}` with {m['best_params']} - "
+                    f"git `{m.get('git_commit')}`, data sha256 `{m['training_data_sha256'][:12]}`")
+          EOF
+
+      - name: Upload model and MLflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: model-and-mlflow
+          path: |
+            models/
+            reports/
+            mlflow.db
+            mlruns/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload logs and executed notebooks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: logs-and-notebooks
+          path: |
+            logs/
+            executed_notebooks/
+          if-no-files-found: ignore

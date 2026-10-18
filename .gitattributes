@@ -1,0 +1,13 @@
+# Normalise line endings so Windows, Prayogshala (Linux) and CI see identical files.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binary artefacts: never touch their bytes
+*.png binary
+*.jpg binary
+*.joblib binary
+*.skops binary
+*.db binary
+*.pdf binary
+*.docx binary

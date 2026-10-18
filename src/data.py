@@ -86,8 +86,12 @@ def split(df: pd.DataFrame, test_size: float = config.TEST_SIZE,
 
 
 def file_sha256(path: Path) -> str:
-    """Fingerprint of a data file, logged with every run for traceability."""
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    """Fingerprint of a data file, logged with every run for traceability.
+
+    Line endings are normalised (CRLF -> LF) so the same data gives the same hash on
+    Windows, Prayogshala (Linux) and CI.
+    """
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 if __name__ == "__main__":

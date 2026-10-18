@@ -8,13 +8,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
 import joblib
 import pandas as pd
+import sklearn
 
 from src import config
+
+
+def version_mismatch(metadata_path: Path = config.MODEL_METADATA_PATH) -> str | None:
+    """Describe a scikit-learn version mismatch between training and now, else None.
+
+    A saved scikit-learn model is only guaranteed to load with the exact version that
+    created it, so the version is recorded in model_metadata.json at training time.
+    """
+    metadata_path = Path(metadata_path)
+    if not metadata_path.exists():
+        return None
+    trained_with = json.loads(metadata_path.read_text()).get("sklearn_version")
+    if trained_with and trained_with != sklearn.__version__:
+        return (f"model was trained with scikit-learn {trained_with} but {sklearn.__version__} "
+                "is installed; install requirements-lock.txt or retrain")
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -22,6 +40,9 @@ def load_model(path: str = str(config.MODEL_PATH)):
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"{path} not found. Train first: python -m src.train")
+    problem = version_mismatch(path.parent / config.MODEL_METADATA_PATH.name)
+    if problem:
+        warnings.warn(problem, RuntimeWarning, stacklevel=2)
     return joblib.load(path)
 
 

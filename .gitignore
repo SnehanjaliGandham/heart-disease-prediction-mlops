@@ -13,6 +13,14 @@ mlruns/
 mlflow.db
 mlartifacts/
 
+# test / CI outputs
+.coverage
+coverage.xml
+htmlcov/
+test-results/
+logs/
+.ruff_cache/
+
 # scratch
 *_bkp.ipynb
 .DS_Store

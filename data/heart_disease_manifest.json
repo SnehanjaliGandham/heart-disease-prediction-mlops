@@ -1,0 +1,10 @@
+{
+  "source": "https://archive.ics.uci.edu/dataset/45/heart+disease",
+  "uci_id": 45,
+  "file": "heart_disease_raw.csv",
+  "rows": 303,
+  "columns": 14,
+  "bytes": 12472,
+  "sha256": "c3855e7c0a818f03a1e90e4f23e0ad5d058dfbd1f276f1aab15d1f02693c1d0d",
+  "recorded_at_utc": "2026-10-18T12:15:01+00:00"
+}

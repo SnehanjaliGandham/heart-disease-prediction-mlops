@@ -49,7 +49,8 @@ print("== Python")
 v = sys.version_info
 ver = f"{v.major}.{v.minor}.{v.micro}"
 if v >= (3, 12):
-    report("PASS", "Python version", ver + "  (requirements.txt and requirements-lock.txt both work)")
+    report("PASS", "Python version",
+           ver + "  (requirements.txt and requirements-lock.txt both work)")
 elif v >= (3, 9):
     report("PASS", "Python version", ver,
            "use requirements.txt (requirements-lock.txt needs Python >= 3.12)")
@@ -72,7 +73,8 @@ report("PASS" if can_reach("pypi.org") else "FAIL", "PyPI (pip install)",
        "reachable" if can_reach("pypi.org") else "NOT reachable",
        "packages cannot be downloaded; ask lab support for a proxy / pip mirror")
 uci = can_reach("archive.ics.uci.edu")
-report("PASS" if uci else "WARN", "UCI repository (dataset)", "reachable" if uci else "NOT reachable",
+report("PASS" if uci else "WARN", "UCI repository (dataset)",
+       "reachable" if uci else "NOT reachable",
        "fine: data/heart_disease_raw.csv is committed, the download step is skipped")
 gh = can_reach("github.com")
 report("PASS" if gh else "WARN", "GitHub (push / CI)", "reachable" if gh else "NOT reachable",

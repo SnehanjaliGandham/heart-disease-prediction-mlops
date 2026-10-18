@@ -1,0 +1,35 @@
+# Tool configuration only (the project is run as `python -m src.<module>`).
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = ["notebooks", ".venv"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes (unused names, undefined variables), I: import order,
+# B: bugbear (likely bugs), UP: pyupgrade (modern syntax)
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = ["E402"]   # matplotlib.use("Agg") must run before pyplot is imported
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["slow: trains real models (a few seconds)"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+    "ignore::UserWarning:mlflow.*",
+]
+
+[tool.coverage.run]
+source = ["src", "scripts"]
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+# command-line entry points are exercised through subprocess tests instead
+exclude_also = ['if __name__ == .__main__.:']
+skip_covered = false

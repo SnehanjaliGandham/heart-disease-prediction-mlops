@@ -23,6 +23,7 @@ import json
 import logging
 import platform
 import shutil
+import subprocess
 import tempfile
 import warnings
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ from pathlib import Path
 
 import joblib
 import mlflow
+import numpy as np
 import pandas as pd
 import sklearn
 from mlflow.models import infer_signature
@@ -147,10 +149,30 @@ def log_candidate(name, search, X_train, X_test, y_test, tmp: Path) -> dict:
             "best_params": search.best_params_, **cv, **test}
 
 
-def save_final_model(name, model, row, data_hash, tmp_plots: dict) -> None:
+def git_commit() -> str:
+    """Short hash of the code version being trained (``unknown`` outside a git repo)."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=config.ROOT_DIR,
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def check_round_trip(model, X_sample) -> None:
+    """Reload the saved file and make sure it predicts exactly like the in-memory model."""
+    reloaded = joblib.load(config.MODEL_PATH)
+    if not np.allclose(reloaded.predict_proba(X_sample), model.predict_proba(X_sample)):
+        raise RuntimeError("Saved model does not reproduce the trained model's predictions")
+    log.info("Round-trip check passed: reloaded model gives identical probabilities")
+
+
+def save_final_model(name, model, row, data_hash, tmp_plots: dict, X_sample=None) -> None:
     """Write the champion to models/ in two formats plus a metadata card."""
     config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, config.MODEL_PATH)
+    if X_sample is not None:
+        check_round_trip(model, X_sample)
 
     if config.MLFLOW_MODEL_DIR.exists():
         shutil.rmtree(config.MLFLOW_MODEL_DIR)
@@ -168,6 +190,7 @@ def save_final_model(name, model, row, data_hash, tmp_plots: dict) -> None:
         "target": "1 = heart disease present (num > 0), 0 = absent",
         "mlflow_run_id": row["run_id"],
         "training_data_sha256": data_hash,
+        "git_commit": git_commit(),
         "trained_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "python_version": platform.python_version(),
         "sklearn_version": sklearn.__version__,
@@ -197,7 +220,9 @@ def main(quick: bool = False, do_register: bool = True,
     run_name = f"training-{datetime.now():%Y%m%d-%H%M%S}"
     with mlflow.start_run(run_name=run_name), tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
-        mlflow.set_tags({"stage": "model_selection", "quick_mode": str(quick)})
+        mlflow.set_tags({"stage": "model_selection", "quick_mode": str(quick),
+                         "git_commit": git_commit(), "python_version": platform.python_version(),
+                         "sklearn_version": sklearn.__version__})
         mlflow.log_params({
             "test_size": config.TEST_SIZE, "cv_folds": config.CV_FOLDS,
             "random_state": config.RANDOM_STATE, "selection_metric": config.SELECTION_METRIC,
@@ -250,7 +275,7 @@ def main(quick: bool = False, do_register: bool = True,
         save_final_model(best_name, fitted[best_name], best.to_dict(), data_hash, {
             "roc": str(roc_path.relative_to(config.ROOT_DIR)),
             "confusion_matrix": str(cm_path.relative_to(config.ROOT_DIR)),
-        })
+        }, X_sample=X_test)
         if do_register:
             register(best["model_uri"])
 
