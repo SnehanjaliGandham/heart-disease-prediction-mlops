@@ -1,5 +1,11 @@
-# Run the API with one command:   docker compose up --build
-# (Step 8 adds Prometheus and Grafana to this file.)
+# API + monitoring with one command (no Kubernetes needed, e.g. in the Prayogshala lab):
+#   docker compose up -d --build
+#     API         http://localhost:8000/docs
+#     Prometheus  http://localhost:9091     (9090 is used by the Kubernetes stack)
+#     Grafana     http://localhost:3001     (3000 is used by the Kubernetes stack)
+#   docker compose down
+# Prometheus and Grafana use the same alert rules and dashboard as on Kubernetes
+# (deployment/monitoring/).
 services:
   api:
     build: .
@@ -10,4 +16,38 @@ services:
     environment:
       PREDICTION_THRESHOLD: "0.5"
       LOG_LEVEL: "INFO"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    container_name: heart-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deployment/monitoring/prometheus/prometheus-docker.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployment/monitoring/prometheus/alerts.yml:/etc/prometheus/rules/alerts.yml:ro
+    ports:
+      - "9091:9090"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.4.12
+    container_name: heart-grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/heart-disease-api.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./deployment/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deployment/monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
     restart: unless-stopped

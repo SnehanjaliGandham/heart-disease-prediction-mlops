@@ -10,7 +10,12 @@ Metrics (exposed at /metrics, scraped by Prometheus in Step 8):
     prediction_probability                       histogram of P(disease)
     prediction_errors_total{reason}              validation / model_unavailable / internal
     input_feature_value{feature}                 summary of incoming values (drift signal)
+    model_training_feature_mean{feature}         training-data mean  } read from the model's
+    model_training_feature_std{feature}          training-data std   } own StandardScaler
     model_info{model_name,model_version}         which model is being served
+    process_*                                    CPU and memory of each API process / pod
+
+Drift = (mean of recent inputs - training mean) / training std, computed in Prometheus.
 """
 from __future__ import annotations
 
@@ -27,11 +32,15 @@ from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
+    ProcessCollector,
     Summary,
+    disable_created_metrics,
     generate_latest,
 )
 
+disable_created_metrics()        # drop the *_created timestamp series (not used, add noise)
 REGISTRY = CollectorRegistry()
+ProcessCollector(registry=REGISTRY)   # per-pod CPU and memory (process_* metrics, Linux)
 
 HTTP_REQUESTS = Counter(
     "http_requests_total", "HTTP requests handled", ["method", "route", "status"],
@@ -54,6 +63,12 @@ FEATURES = Summary(
 MODEL_INFO = Gauge(
     "model_info", "Model currently served (value is always 1)",
     ["model_name", "model_version"], registry=REGISTRY)
+TRAINING_MEAN = Gauge(
+    "model_training_feature_mean", "Mean of the feature in the training data",
+    ["feature"], registry=REGISTRY)
+TRAINING_STD = Gauge(
+    "model_training_feature_std", "Standard deviation of the feature in the training data",
+    ["feature"], registry=REGISTRY)
 
 MONITORED_FEATURES = ("age", "trestbps", "chol", "thalach", "oldpeak")
 
@@ -78,6 +93,28 @@ def record_prediction(label: str, probability: float, features: dict) -> None:
         value = features.get(name)
         if value is not None:
             FEATURES.labels(feature=name).observe(float(value))
+
+
+def set_training_baseline(model) -> dict:
+    """Publish the training mean/std of the monitored features as a drift baseline.
+
+    The values come from the StandardScaler fitted inside the saved pipeline, so the
+    baseline always matches the model being served. Returns {} if the pipeline does
+    not have that shape (the API keeps working, only the drift panel stays empty).
+    """
+    try:
+        numeric = model.named_steps["preprocess"].named_transformers_["num"]
+        scaler = numeric.named_steps["scale"]
+        columns = list(model.named_steps["preprocess"].transformers_[0][2])
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return {}
+    baseline = {}
+    for name, mean, std in zip(columns, scaler.mean_, scaler.scale_):
+        if name in MONITORED_FEATURES:
+            TRAINING_MEAN.labels(feature=name).set(float(mean))
+            TRAINING_STD.labels(feature=name).set(float(std))
+            baseline[name] = (round(float(mean), 3), round(float(std), 3))
+    return baseline
 
 
 # ---------------------------------------------------------------- logging

@@ -8,7 +8,7 @@ End-to-end, reproducible ML pipeline for predicting heart disease from the
 UCI Heart Disease (Cleveland) dataset: data acquisition → EDA → feature
 engineering → model training & tuning → MLflow tracking → packaged model →
 automated tests and CI/CD → containerised prediction API → Kubernetes deployment with autoscaling
-(monitoring in a later stage).
+→ monitoring with Prometheus and Grafana, including data-drift detection.
 
 ## Project structure
 
@@ -17,12 +17,14 @@ data/                      raw + cleaned CSV, UCI variable descriptions, SHA-256
 scripts/download_data.py   downloads the dataset from UCI and verifies it against the manifest
 scripts/check_env.py       checks a machine (e.g. Prayogshala) can run the project
 scripts/quality_gate.py    blocks a model that falls below minimum metric standards
+scripts/run_pipeline.sh    whole pipeline in one command (run_pipeline.ps1 on Windows)
 scripts/smoke_test.py      end-to-end checks against a running API (Docker / Kubernetes)
-scripts/load_test.py       concurrent traffic generator: throughput, latency percentiles, errors
+scripts/load_test.py       traffic generator (real patient records, optional drifted population)
+scripts/check_monitoring.py checks Prometheus scrapes the API and Grafana has the dashboard
 src/
   config.py                paths, feature lists, constants (single source of truth)
   data.py                  load, validate, clean, split
-  features.py              preprocessing ColumnTransformer
+  features.py              engineered feature (ClinicalFeatures) + preprocessing ColumnTransformer
   models.py                candidate models + hyper-parameter grids
   evaluate.py              metrics and evaluation plots
   train.py                 tuning, model selection, MLflow logging, packaging
@@ -38,8 +40,10 @@ samples/                   example request bodies (high/low risk, missing values
 tests/                     pytest unit and API tests (Task 5)
 .github/workflows/ci.yml   CI/CD pipeline: lint -> tests (Py 3.10-3.13) -> train + quality gate -> Docker -> Kubernetes
 deployment/k8s/            Kubernetes manifests (Deployment, LoadBalancer Service, HPA, PDB, ConfigMap) (Task 7)
+deployment/k8s-optional/   optional Ingress (needs an Ingress controller)
+deployment/monitoring/     Prometheus (config, alert rules + rule tests) and Grafana (dashboard) (Task 8)
 Dockerfile                 multi-stage, non-root image for the API (Task 6)
-docker-compose.yml         one-command local run of the API
+docker-compose.yml         API + Prometheus + Grafana with one command (no Kubernetes needed)
 requirements-serve.txt     the only packages the API image installs
 screenshots/               evidence for the report
 ```
@@ -70,6 +74,16 @@ pip install -r requirements.txt
 
 ## Run the pipeline
 
+One command runs everything (environment check → data → cleaning → training + MLflow → quality gate →
+sample prediction → lint + tests) and stops at the first failure:
+
+```bash
+bash scripts/run_pipeline.sh            # Linux / Prayogshala      (add --quick for small grids)
+.\scripts\run_pipeline.ps1              # Windows PowerShell       (add -Quick)
+```
+
+Or step by step:
+
 ```bash
 python scripts/download_data.py      # 1. get the data (skipped if already present)
 python -m src.data                   # 2. raw -> data/heart_disease_clean.csv
@@ -79,6 +93,32 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db   # 5. browse runs at http://1
 ```
 
 `python -m src.train --quick` runs with small grids (handy for quick local checks).
+
+## Feature engineering and model selection
+
+* **Preprocessing** inside each model `Pipeline` (re-fitted on every CV fold, so no leakage): median imputation +
+  standard scaling for numeric features, most-frequent imputation + one-hot encoding for coded features.
+* **Engineered feature** `hr_pct_predicted = thalach / (220 − age)`: peak heart rate as a share of the
+  age-predicted maximum (a recognised marker of heart disease). It is added by a stateless transformer inside the
+  pipeline, so the API still takes the 13 raw values, and it is a **hyper-parameter** (`features__add_hr_ratio`) of
+  every model rather than an assumption. Result (`reports/feature_ablation.csv`): it separates the classes on its
+  own (mean 0.85 with disease vs 0.95 without) but adds nothing once `thalach` and `age` are in the model, so the
+  grid search leaves it out for all three models.
+* **Selection rule, fixed before training** (`src/config.py`): rank models by mean 5-fold CV ROC-AUC; models within
+  0.01 of the best count as equal and the simplest is chosen (LR → RF → GB). The test set is never used for selection.
+* **Over-fitting check**: train-fold minus validation-fold ROC-AUC inside cross-validation.
+
+## Results
+
+| Model | CV ROC-AUC (5-fold) | Over-fitting gap | Test accuracy | Test recall | Test ROC-AUC |
+|---|---|---|---|---|---|
+| **Logistic Regression (selected)** | **0.911 ± 0.018** | **0.015** | 0.885 | 0.929 | 0.961 |
+| Random Forest | 0.900 ± 0.032 | 0.057 | 0.885 | 0.929 | 0.955 |
+| Gradient Boosting | 0.884 ± 0.027 | 0.077 | 0.902 | 0.929 | 0.960 |
+| Majority baseline | 0.500 | 0.000 | 0.541 | 0.000 | 0.500 |
+
+Logistic Regression has the best and most stable CV score and over-fits least; the held-out test set (61 patients)
+is used only for reporting.
 
 ## Testing and CI/CD
 
@@ -98,11 +138,11 @@ Every push and pull request to `main` runs the GitHub Actions pipeline:
 
 | Job | What it does | Fails when |
 |---|---|---|
-| 1 · Lint | `ruff` static checks | style or likely-bug findings |
+| 1 · Lint | `ruff` static checks; `promtool` validates the Prometheus config and unit-tests the alert rules | style or likely-bug findings, invalid config, an alert that does not fire as specified |
 | 2 · Unit tests | pytest on Python 3.10, 3.11, 3.12 and 3.13 with coverage | any test fails or coverage < 90 % |
 | 3 · Train | verify data checksum → clean → train + MLflow → quality gate → inference smoke test → packaged-model tests → execute notebooks | any step errors or the model misses the quality gate |
 | 4 · Docker | build the image with the model trained in job 3 → start the container → smoke test → wait for HEALTHCHECK = healthy → check it runs as non-root → push to GitHub Container Registry (pushes to `main` only) | build fails, any smoke check fails or the container is unhealthy |
-| 5 · Kubernetes | create a temporary cluster (kind) → `kubectl apply -k deployment/k8s` → wait for the rollout → smoke test through the Service → delete a pod and check it is replaced → rolling update | a manifest is invalid, pods never become ready, a smoke check fails or self-healing / rollout fails |
+| 5 · Kubernetes | create a temporary cluster (kind) → `kubectl apply -k deployment/k8s` → wait for the rollout → smoke test through the Service → delete a pod and check it is replaced → rolling update → deploy Prometheus + Grafana and check they monitor the API | a manifest is invalid, pods never become ready, a smoke check fails, self-healing / rollout fails or monitoring cannot see the API |
 
 Each job uploads its results as artifacts (lint report, JUnit/coverage reports, packaged
 model, MLflow store, logs, executed notebooks) and writes a summary to the run page.
@@ -186,13 +226,41 @@ kubectl -n heart-disease rollout undo deployment/heart-disease-api       # faile
 To run the published image instead of a local build:
 `kubectl -n heart-disease set image deployment/heart-disease-api api=ghcr.io/snehanjaligandham/heart-disease-api:latest`.
 
-## Results so far
+## Monitoring (Prometheus + Grafana)
 
-| Model | CV ROC-AUC (5-fold) | Test accuracy | Test recall | Test ROC-AUC |
-|---|---|---|---|---|
-| **Logistic Regression (selected)** | **0.911 ± 0.018** | 0.885 | 0.929 | 0.961 |
-| Random Forest | 0.900 ± 0.032 | 0.885 | 0.929 | 0.955 |
-| Gradient Boosting | 0.884 ± 0.027 | 0.902 | 0.929 | 0.960 |
-| Majority baseline | 0.500 | 0.541 | 0.000 | 0.500 |
+```bash
+kubectl apply -k deployment/monitoring          # Kubernetes: Prometheus :9090, Grafana :3000
+# or, without Kubernetes:  docker compose up -d --build   (API :8000, Prometheus :9091, Grafana :3001)
+python scripts/check_monitoring.py               # targets up, rules loaded, dashboard provisioned
+python scripts/load_test.py --url http://localhost:8080 --duration 300            # normal traffic
+python scripts/load_test.py --url http://localhost:8080 --duration 600 --profile drifted   # drift demo
+```
 
-The model is selected on cross-validated ROC-AUC; the held-out test set is used only for reporting.
+* **Metrics** (`/metrics` on every pod): requests by route/status, latency histogram, predictions by
+  class, predicted-probability histogram, validation errors, the values of incoming features,
+  the model version, CPU/memory, and the **training mean and standard deviation of each feature**,
+  read from the model's own `StandardScaler` so the drift baseline always matches the model served.
+* **Prometheus** finds every API pod by itself (Kubernetes service discovery + the `prometheus.io/*`
+  pod annotations), so pods added by the autoscaler are monitored automatically. It may only read
+  pods in the API's namespace (namespaced `Role`).
+* **Grafana dashboard** (provisioned from `deployment/monitoring/grafana/dashboards/`, no manual
+  setup): pods up, request rate, server-error ratio, p50/p95/p99 latency, traffic per pod (load
+  balancing), CPU/memory per pod, predictions per class, positive-prediction share, mean predicted
+  probability, **input drift per feature**, recent-vs-training means, rejected requests and active alerts.
+* **Data drift** = (mean of the last 15 min of inputs − training mean) / training standard deviation.
+  With real patient records it stays near 0; with the drifted population it exceeds the ±0.5 band.
+* **Alerts** (`prometheus/alerts.yml`, unit-tested with `promtool test rules`):
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| HeartApiDown | a pod's `/metrics` fails for 1 min | critical |
+| HeartApiNoTargets | no API pod found for 2 min | critical |
+| HeartApiHighErrorRate | > 5 % of requests return 5xx for 5 min | critical |
+| HeartApiSlowPredictions | p95 latency of `/predict` > 500 ms for 10 min | warning |
+| HeartApiInputDrift | a feature's drift score is beyond ±0.5 for 5 min (with ≥ 50 requests) | warning |
+| HeartApiPredictionShift | positive predictions < 20 % or > 80 % for 5 min (training ≈ 46 %) | warning |
+| HeartApiManyInvalidRequests | > 20 % of prediction requests rejected for 10 min | warning |
+
+Grafana shows dashboards without logging in; log in as `admin` / `admin` (you are asked to change it)
+to edit. This is a development set-up – on a shared cluster the admin password would come from a
+Kubernetes Secret.

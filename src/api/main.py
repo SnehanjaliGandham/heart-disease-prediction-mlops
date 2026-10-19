@@ -92,6 +92,7 @@ def _load(model_path: Path, log) -> dict:
         state["model_version"] = f"{meta.get('model_name', 'model')}-{stamp}"
         obs.MODEL_INFO.labels(model_name=meta.get("model_name", "unknown"),
                               model_version=state["model_version"]).set(1)
+        obs.set_training_baseline(state["model"])
         log.info("model loaded", extra={"fields": {
             "event": "model_loaded", "path": str(model_path),
             "model_version": state["model_version"]}})

@@ -8,7 +8,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
 from src import config
-from src.features import build_preprocessor
+from src.features import ClinicalFeatures, build_preprocessor
 
 # scikit-learn 1.8 replaced LogisticRegression(penalty=...) with l1_ratio alone.
 # Detect the version so the same grid search runs on old and new installs.
@@ -16,9 +16,15 @@ _SK_VERSION = tuple(int(x) for x in sklearn.__version__.split(".")[:2])
 NEW_LOGREG_API = _SK_VERSION >= (1, 8)
 
 
+# Every real model also tunes whether the engineered feature is used.
+FEATURE_GRID = {"features__add_hr_ratio": [False, True]}
+
+
 def make_pipeline(estimator) -> Pipeline:
-    """preprocess -> estimator, as one object."""
-    return Pipeline([("preprocess", build_preprocessor()), ("model", estimator)])
+    """engineered features -> preprocess -> estimator, as one object."""
+    return Pipeline([("features", ClinicalFeatures()),
+                     ("preprocess", build_preprocessor()),
+                     ("model", estimator)])
 
 
 def get_candidates(quick: bool = False) -> dict:
@@ -34,6 +40,7 @@ def get_candidates(quick: bool = False) -> dict:
         "logistic_regression": (
             LogisticRegression(solver="saga", max_iter=5000, random_state=rs),
             {
+                **FEATURE_GRID,
                 "model__C": [0.01, 0.1, 1.0, 10.0],
                 "model__class_weight": [None, "balanced"],
                 **({"model__l1_ratio": [0.0, 0.5, 1.0]} if NEW_LOGREG_API else
@@ -44,6 +51,7 @@ def get_candidates(quick: bool = False) -> dict:
         "random_forest": (
             RandomForestClassifier(random_state=rs, n_jobs=-1),
             {
+                **FEATURE_GRID,
                 "model__n_estimators": [200, 500],
                 "model__max_depth": [None, 4, 8],
                 "model__min_samples_leaf": [1, 3, 5],
@@ -54,6 +62,7 @@ def get_candidates(quick: bool = False) -> dict:
         "gradient_boosting": (
             GradientBoostingClassifier(random_state=rs),
             {
+                **FEATURE_GRID,
                 "model__n_estimators": [100, 200],
                 "model__learning_rate": [0.03, 0.1],
                 "model__max_depth": [2, 3],
@@ -63,7 +72,7 @@ def get_candidates(quick: bool = False) -> dict:
     }
     if quick:
         candidates["logistic_regression"] = (
-            candidates["logistic_regression"][0], {"model__C": [0.1, 1.0]})
+            candidates["logistic_regression"][0], {**FEATURE_GRID, "model__C": [0.1, 1.0]})
         candidates["random_forest"] = (
             candidates["random_forest"][0],
             {"model__n_estimators": [100], "model__max_depth": [None, 4]})

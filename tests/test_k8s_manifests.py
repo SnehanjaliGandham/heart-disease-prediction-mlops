@@ -137,3 +137,12 @@ def test_manifests_contain_no_secrets(docs):
     assert "Secret" not in {kind for kind, _ in docs}
     text = "".join(p.read_text() for p in Path(K8S).glob("*.yaml")).lower()
     assert not re.search(r"password|api[_-]?key|secret", text)
+
+
+def test_optional_ingress_routes_to_the_api_service(docs):
+    ingress = yaml.safe_load(
+        (config.ROOT_DIR / "deployment" / "k8s-optional" / "ingress.yaml").read_text())
+    assert ingress["metadata"]["namespace"] == "heart-disease"
+    backend = ingress["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"]
+    service = docs[("Service", backend["name"])]
+    assert backend["port"]["name"] in {p["name"] for p in service["spec"]["ports"]}

@@ -37,7 +37,7 @@ def test_quick_grids_are_no_larger_than_full_grids():
 def test_pipeline_structure():
     estimator, _ = get_candidates()["random_forest"]
     pipe = make_pipeline(estimator)
-    assert [step for step, _ in pipe.steps] == ["preprocess", "model"]
+    assert [step for step, _ in pipe.steps] == ["features", "preprocess", "model"]
 
 
 def test_baseline_is_majority_class():

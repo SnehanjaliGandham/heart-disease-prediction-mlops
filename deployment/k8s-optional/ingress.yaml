@@ -1,0 +1,29 @@
+# OPTIONAL - an Ingress in front of the API, as an alternative to the LoadBalancer Service.
+# Not part of `kubectl apply -k deployment/k8s` because it needs an Ingress controller
+# (Docker Desktop has none by default; on a cloud cluster one usually exists).
+#
+#   1. Install a controller, e.g. Traefik:  helm install traefik traefik/traefik -n traefik --create-namespace
+#   2. kubectl apply -f deployment/k8s-optional/ingress.yaml
+#   3. curl http://heart-api.localtest.me/health      (*.localtest.me resolves to 127.0.0.1)
+#
+# On a real domain, add a `tls:` section with a certificate (e.g. from cert-manager).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: heart-disease-api
+  namespace: heart-disease
+  labels:
+    app.kubernetes.io/name: heart-disease-api
+spec:
+  ingressClassName: traefik          # change to the class of your controller (kubectl get ingressclass)
+  rules:
+    - host: heart-api.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: heart-disease-api
+                port:
+                  name: http

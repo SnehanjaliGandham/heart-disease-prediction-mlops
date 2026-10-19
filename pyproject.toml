@@ -3,7 +3,7 @@
 [tool.ruff]
 line-length = 100
 target-version = "py39"
-extend-exclude = ["notebooks", ".venv"]
+extend-exclude = ["notebooks", ".venv", "models", "mlruns"]   # models/ holds generated copies
 
 [tool.ruff.lint]
 # E/W: pycodestyle, F: pyflakes (unused names, undefined variables), I: import order,

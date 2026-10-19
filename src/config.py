@@ -35,6 +35,9 @@ TARGET = "target"           # binary: 1 = heart disease present (num > 0)
 NUMERIC_FEATURES = ["age", "trestbps", "chol", "thalach", "oldpeak", "ca"]
 CATEGORICAL_FEATURES = ["sex", "cp", "fbs", "restecg", "exang", "slope", "thal"]
 FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+# Engineered feature (added inside the model pipeline, so the API still takes the 13 raw
+# values): peak heart rate as a share of the age-predicted maximum, 220 - age.
+ENGINEERED_FEATURES = ["hr_pct_predicted"]
 
 # Allowed codes for categorical features (from the UCI data dictionary).
 CATEGORY_CODES = {
@@ -62,3 +65,8 @@ RANDOM_STATE = 42
 TEST_SIZE = 0.2
 CV_FOLDS = 5
 SELECTION_METRIC = "roc_auc"   # best model is chosen on CV ROC-AUC, never on the test set
+# Selection rule, fixed before training: models whose CV score is within this margin of
+# the best are treated as equally good, and the simplest of them is chosen
+# (simpler = easier to explain, faster to serve, less likely to overfit).
+SELECTION_TOLERANCE = 0.01
+SIMPLICITY_ORDER = ["logistic_regression", "random_forest", "gradient_boosting"]

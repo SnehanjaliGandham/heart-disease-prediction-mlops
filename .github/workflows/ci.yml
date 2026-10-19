@@ -1,14 +1,15 @@
 # CI/CD pipeline for the heart disease MLOps project.
 #
-#   1 Lint ─► 2 Unit tests (Py 3.10–3.13) ─► 3 Train, track, gate & package
-#     ─► 4 Docker image ─► 5 Kubernetes deployment test
+#   1 Lint + alert-rule tests ─► 2 Unit tests (Py 3.10–3.13) ─► 3 Train, track, gate & package
+#     ─► 4 Docker image ─► 5 Kubernetes deployment + monitoring test
 #
 # Job 4 builds the API image around the model that job 3 just trained and gated,
 # runs it, smoke-tests every endpoint and - on pushes to main - publishes it to the
 # GitHub Container Registry (ghcr.io).
 # Job 5 deploys that image with the manifests in deployment/k8s to a temporary
-# Kubernetes cluster (kind), smoke-tests it through the Service and checks that a
-# deleted pod is replaced and that a rolling update completes.
+# Kubernetes cluster (kind), smoke-tests it through the Service, checks that a
+# deleted pod is replaced and that a rolling update completes, then deploys
+# Prometheus + Grafana (deployment/monitoring) and checks they monitor the API.
 #
 # Every job depends on the previous one, so any failure (lint error, failing test,
 # model below the quality gate, broken image or manifest) stops the pipeline with a
@@ -41,7 +42,7 @@ defaults:
 jobs:
   # ---------------------------------------------------------------- 1. lint
   lint:
-    name: "1 · Lint (ruff)"
+    name: "1 · Lint (ruff) & monitoring rules"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -59,6 +60,16 @@ jobs:
           mkdir -p logs
           ruff check --output-format=github .
           ruff check --statistics . | tee logs/lint-report.txt
+
+      - name: Check Prometheus config and unit-test the alert rules (promtool)
+        run: |
+          promtool() {
+            docker run --rm -v "$PWD/deployment/monitoring/prometheus:/cfg" -w /cfg \
+              --entrypoint promtool prom/prometheus:v3.13.4 "$@"
+          }
+          promtool check rules alerts.yml
+          promtool check config --syntax-only prometheus-docker.yml prometheus-k8s.yml
+          promtool test rules alerts_test.yml | tee logs/alert-rule-tests.txt
 
       - name: Upload lint report
         if: always()
@@ -129,7 +140,7 @@ jobs:
     name: "3 · Train, track, gate & package model"
     needs: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -299,7 +310,7 @@ jobs:
 
   # ---------------------------------------------------------------- 5. kubernetes
   kubernetes:
-    name: "5 · Deploy to Kubernetes (kind) & smoke-test"
+    name: "5 · Deploy to Kubernetes (kind), smoke-test & monitor"
     needs: docker
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -364,6 +375,23 @@ jobs:
           kubectl -n "$NS" rollout status deployment/heart-disease-api --timeout=180s
           kubectl -n "$NS" rollout history deployment/heart-disease-api
 
+      - name: Deploy monitoring (Prometheus + Grafana)
+        run: |
+          kubectl apply -k deployment/monitoring
+          kubectl -n monitoring rollout status deployment/prometheus --timeout=240s
+          kubectl -n monitoring rollout status deployment/grafana --timeout=240s
+          kubectl -n monitoring get pods,svc
+
+      - name: Check monitoring sees the API
+        run: |
+          pkill -f "kubectl.*port-forward" || true     # the earlier forward may point at a deleted pod
+          kubectl -n monitoring port-forward service/prometheus 9090:9090 > pf-prometheus.log 2>&1 &
+          kubectl -n monitoring port-forward service/grafana 3000:3000 > pf-grafana.log 2>&1 &
+          kubectl -n "$NS" port-forward service/heart-disease-api 8080:8080 > port-forward.log 2>&1 &
+          sleep 5
+          python3 scripts/load_test.py --url http://localhost:8080 --duration 30 --workers 2 | tail -5
+          python3 scripts/check_monitoring.py --wait 120 --min-targets 2 | tee monitoring-check.log
+
       - name: Add deployment summary
         if: always()
         run: |
@@ -373,6 +401,8 @@ jobs:
             kubectl -n "$NS" get deploy,pods,svc -o wide 2>&1 || true
             echo
             grep -E "^\[|All checks|failed" k8s-smoke-test.log 2>/dev/null || true
+            echo
+            cat monitoring-check.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -384,6 +414,9 @@ jobs:
             kubectl -n "$NS" describe pods
             kubectl -n "$NS" get events --sort-by=.lastTimestamp
             kubectl -n "$NS" logs -l app.kubernetes.io/name=heart-disease-api --prefix --tail=50
+            kubectl -n monitoring describe pods
+            kubectl -n monitoring logs deployment/prometheus --tail=50
+            kubectl -n monitoring logs deployment/grafana --tail=50
           } > k8s-diagnostics.log 2>&1 || true
 
       - name: Upload Kubernetes logs
@@ -395,7 +428,9 @@ jobs:
             rendered.yaml
             k8s-smoke-test.log
             k8s-diagnostics.log
+            monitoring-check.log
             port-forward.log
+            pf-*.log
           if-no-files-found: ignore
 
       - name: Delete the cluster

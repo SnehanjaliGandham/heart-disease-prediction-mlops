@@ -71,3 +71,32 @@ def test_summary_of_no_requests():
     from collections import Counter
     result = load_test.summarise(Counter(), [], 0)
     assert result["requests"] == 0 and result["requests_per_second"] == 0.0
+
+
+def test_patients_come_from_the_dataset_and_are_valid():
+    from src.api.schemas import PatientFeatures
+    patients = load_test.load_patients()
+    assert len(patients) > 250
+    for patient in patients + [load_test.drifted(p) for p in patients]:
+        PatientFeatures(**patient)                 # every request passes API validation
+
+
+def test_missing_dataset_falls_back_to_samples(tmp_path):
+    assert load_test.load_patients(tmp_path / "none.csv") == load_test.BODIES
+
+
+def test_drifted_profile_shifts_the_population():
+    patients = load_test.load_patients()
+    shifted = [load_test.drifted(p) for p in patients]
+
+    def mean(rows, field):
+        return sum(r[field] for r in rows) / len(rows)
+    assert mean(shifted, "age") > mean(patients, "age") + 10
+    assert mean(shifted, "chol") > mean(patients, "chol") + 40
+    assert mean(shifted, "thalach") < mean(patients, "thalach") - 15
+
+
+def test_drifted_run(server, capsys):
+    assert load_test.main(["--url", url(server), "--duration", "0.3", "--workers", "2",
+                           "--profile", "drifted"]) == 0
+    assert "(drifted patients)" in capsys.readouterr().out

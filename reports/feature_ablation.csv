@@ -1,0 +1,4 @@
+model,cv_roc_auc_without_hr_ratio,cv_roc_auc_with_hr_ratio,feature_kept
+logistic_regression,0.9113,0.909,False
+random_forest,0.8998,0.8985,False
+gradient_boosting,0.8839,0.8835,False

@@ -2,6 +2,7 @@
   "model_name": "logistic_regression",
   "model_class": "LogisticRegression",
   "best_params": {
+    "add_hr_ratio": false,
     "C": 0.1,
     "class_weight": null,
     "l1_ratio": 0.0
@@ -17,7 +18,11 @@
     "cv_f1_mean": 0.8299,
     "cv_f1_std": 0.026,
     "cv_roc_auc_mean": 0.9113,
-    "cv_roc_auc_std": 0.018
+    "cv_roc_auc_std": 0.018,
+    "cv_train_roc_auc_mean": 0.9258,
+    "cv_overfit_gap": 0.0145,
+    "cv_roc_auc_without_hr_ratio": 0.9113,
+    "cv_roc_auc_with_hr_ratio": 0.909
   },
   "test_metrics": {
     "test_accuracy": 0.8852,
@@ -43,12 +48,14 @@
       "exang",
       "slope",
       "thal"
-    ]
+    ],
+    "engineered": []
   },
   "target": "1 = heart disease present (num > 0), 0 = absent",
-  "mlflow_run_id": "227189b25e3a49fb9570b9abc2b80cac",
-  "training_data_sha256": "2c47d9ee8b2e0d30e81c113a079baec0bb3814b1cef093e675610de45df54ffc",
-  "trained_at_utc": "2026-10-18T11:43:39+00:00",
+  "mlflow_run_id": "4d73b24f93f64ae5b4118f052ee675d6",
+  "training_data_sha256": "e185aa7d493f97bcc19c257587aad16c7ad5226b5ec61facf75c7acfc9b33c92",
+  "git_commit": "c19ff10",
+  "trained_at_utc": "2026-10-19T10:46:37+00:00",
   "python_version": "3.13.5",
   "sklearn_version": "1.9.1",
   "figures": {

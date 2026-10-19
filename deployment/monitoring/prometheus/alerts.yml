@@ -1,0 +1,105 @@
+# Alert rules for the prediction API. Each one is unit-tested in alerts_test.yml
+# (`promtool test rules`), and the tests run in CI.
+#
+# Drift is measured as a standardised mean shift:
+#   (mean of inputs over the last 15 min - training mean) / training standard deviation
+# The training mean/std come from the model's own StandardScaler (exported by the API).
+groups:
+  - name: heart-disease-api.recording
+    rules:
+      - record: feature:input_mean:15m
+        expr: |
+          sum by (feature) (rate(input_feature_value_sum{job="heart-disease-api"}[15m]))
+            /
+          sum by (feature) (rate(input_feature_value_count{job="heart-disease-api"}[15m]))
+      - record: feature:drift_score:15m
+        expr: |
+          (feature:input_mean:15m - on (feature) max by (feature) (model_training_feature_mean))
+            / on (feature) max by (feature) (model_training_feature_std)
+      - record: predictions:disease_share:15m
+        expr: |
+          sum(rate(predictions_total{job="heart-disease-api", label="Heart disease"}[15m]))
+            /
+          sum(rate(predictions_total{job="heart-disease-api"}[15m]))
+
+  - name: heart-disease-api.alerts
+    rules:
+      - alert: HeartApiDown
+        expr: up{job="heart-disease-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API pod {{ $labels.pod }} is not responding to Prometheus"
+          description: "The /metrics endpoint of {{ $labels.pod }} has failed for 1 minute."
+
+      - alert: HeartApiNoTargets
+        expr: absent(up{job="heart-disease-api"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No prediction API pods are being monitored"
+          description: "Prometheus has found no API pod to scrape for 2 minutes - is the deployment running?"
+
+      - alert: HeartApiHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="heart-disease-api", status=~"5.."}[5m]))
+            /
+          sum(rate(http_requests_total{job="heart-disease-api"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5 % of API requests fail with a server error"
+          description: "Server error ratio is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HeartApiSlowPredictions
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="heart-disease-api", route="/predict"}[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "95th percentile prediction latency above 500 ms"
+          description: "p95 latency of /predict is {{ $value | humanizeDuration }}."
+
+      - alert: HeartApiInputDrift
+        expr: |
+          abs(feature:drift_score:15m) > 0.5
+            and on (feature)
+          sum by (feature) (increase(input_feature_value_count{job="heart-disease-api"}[15m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Input drift on '{{ $labels.feature }}'"
+          description: >-
+            The mean of '{{ $labels.feature }}' in recent requests is {{ $value | printf "%.2f" }}
+            training standard deviations away from the training data. The model may need retraining.
+
+      - alert: HeartApiPredictionShift
+        expr: |
+          (predictions:disease_share:15m < 0.2 or predictions:disease_share:15m > 0.8)
+            and on ()
+          sum(increase(predictions_total{job="heart-disease-api"}[15m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Share of 'Heart disease' predictions is unusual"
+          description: "{{ $value | humanizePercentage }} of recent predictions are positive (training data: about 46 %)."
+
+      - alert: HeartApiManyInvalidRequests
+        expr: |
+          sum(rate(prediction_errors_total{job="heart-disease-api", reason="validation"}[10m]))
+            /
+          sum(rate(http_requests_total{job="heart-disease-api", route=~"/predict.*"}[10m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 20 % of prediction requests are rejected as invalid"
+          description: "A client may be sending data in the wrong format ({{ $value | humanizePercentage }} rejected)."

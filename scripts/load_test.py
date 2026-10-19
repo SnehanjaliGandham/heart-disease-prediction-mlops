@@ -4,14 +4,20 @@ Standard library only. Used to demonstrate autoscaling (Kubernetes HPA) and to p
 traffic on the monitoring dashboards:
     python scripts/load_test.py                                   # 60 s, 8 workers, :8000
     python scripts/load_test.py --url http://localhost:8080 --duration 180 --workers 16
+    python scripts/load_test.py --url http://localhost:8080 --profile drifted   # drift demo
 
-Requests mix a high-risk, a low-risk and a missing-values patient, plus about 5 %
-invalid requests so that error metrics are not empty.
+Patients are real records from data/heart_disease_clean.csv, so the traffic has the
+same distribution as the training data. `--profile drifted` makes them older, with
+higher cholesterol and blood pressure and a lower maximum heart rate - the kind of
+population change the drift panel and alert in Grafana/Prometheus should catch.
+About 5 % of requests are deliberately invalid so that error metrics are not empty.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import random
 import statistics
 import threading
 import time
@@ -20,10 +26,39 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-SAMPLES = Path(__file__).resolve().parents[1] / "samples"
+ROOT = Path(__file__).resolve().parents[1]
+SAMPLES = ROOT / "samples"
+DATASET = ROOT / "data" / "heart_disease_clean.csv"
 BODIES = [json.loads((SAMPLES / f"{n}.json").read_text())
           for n in ("high_risk", "low_risk", "missing_values")]
 INVALID = json.loads((SAMPLES / "invalid.json").read_text())
+INTEGER_FIELDS = ("age", "sex", "cp", "fbs", "restecg", "exang", "slope", "ca", "thal")
+# drifted population: (shift, lower limit, upper limit) - limits keep requests valid
+DRIFT = {"age": (15, 1, 120), "trestbps": (15, 50, 250), "chol": (60, 50, 700),
+         "thalach": (-25, 50, 250), "oldpeak": (1.0, 0, 10)}
+
+
+def load_patients(path: Path = DATASET) -> list[dict]:
+    """Patient records (without the label) from the cleaned dataset, or the samples."""
+    if not path.exists():
+        return list(BODIES)
+    patients = []
+    with path.open(newline="") as f:
+        for row in csv.DictReader(f):
+            row.pop("target", None)
+            patients.append({k: (None if v == "" else
+                                 int(float(v)) if k in INTEGER_FIELDS else float(v))
+                             for k, v in row.items()})
+    return patients
+
+
+def drifted(patient: dict) -> dict:
+    out = dict(patient)
+    for field, (shift, low, high) in DRIFT.items():
+        value = out[field] + shift
+        out[field] = int(min(max(value, low), high)) if field == "age" else \
+            round(min(max(value, low), high), 1)
+    return out
 
 
 def send(url: str, body: dict) -> tuple[int, float, str]:
@@ -41,16 +76,21 @@ def send(url: str, body: dict) -> tuple[int, float, str]:
     return status, time.perf_counter() - start, ""
 
 
-def run(url: str, duration: float, workers: int, report_every: float = 10) -> dict:
+def run(url: str, duration: float, workers: int, report_every: float = 10,
+        profile: str = "normal", patients: list | None = None) -> dict:
+    patients = patients or load_patients()
+    if profile == "drifted":
+        patients = [drifted(p) for p in patients]
     stop_at = time.time() + duration
     lock = threading.Lock()
     statuses: Counter = Counter()
     latencies: list[float] = []
 
     def worker(n: int):
+        rng = random.Random(n)
         i = n
         while time.time() < stop_at:
-            body = INVALID if i % 20 == 0 else BODIES[i % len(BODIES)]
+            body = INVALID if i % 20 == 0 else rng.choice(patients)
             status, seconds, _ = send(url, body)
             with lock:
                 statuses[status] += 1
@@ -97,10 +137,13 @@ def main(argv=None) -> int:
     parser.add_argument("--url", default="http://localhost:8000")
     parser.add_argument("--duration", type=float, default=60, help="seconds")
     parser.add_argument("--workers", type=int, default=8, help="concurrent clients")
+    parser.add_argument("--profile", choices=["normal", "drifted"], default="normal",
+                        help="normal = patients as in the training data; drifted = shifted")
     args = parser.parse_args(argv)
     url = args.url.rstrip("/")
-    print(f"Load test: {url}/predict  {args.workers} workers for {args.duration:.0f} s")
-    result = run(url, args.duration, args.workers)
+    print(f"Load test: {url}/predict  {args.workers} workers for {args.duration:.0f} s"
+          f"  ({args.profile} patients)")
+    result = run(url, args.duration, args.workers, profile=args.profile)
     print(json.dumps(result, indent=2))
     # 422s are intentional; anything else that is not 200 counts as a failure
     unexpected = {s: n for s, n in result["status_codes"].items() if s not in (200, 422)}

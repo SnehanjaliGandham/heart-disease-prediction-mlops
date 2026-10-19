@@ -1,0 +1,34 @@
+# Monitoring stack for the API on Kubernetes:  kubectl apply -k deployment/monitoring
+#   Prometheus  http://localhost:9090   (targets, alert rules, queries)
+#   Grafana     http://localhost:3000   (dashboard "Heart Disease API")
+# The same config files are used by docker-compose.yml (Prometheus config differs only
+# in how it finds the API: Kubernetes discovery here, a fixed address in Compose).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - grafana.yaml
+generatorOptions:
+  disableNameSuffixHash: false     # a config change gives a new name -> pods restart with it
+configMapGenerator:
+  - name: prometheus-config
+    namespace: monitoring
+    files:
+      - prometheus.yml=prometheus/prometheus-k8s.yml
+  - name: prometheus-rules
+    namespace: monitoring
+    files:
+      - prometheus/alerts.yml
+  - name: grafana-datasources
+    namespace: monitoring
+    files:
+      - grafana/provisioning/datasources/prometheus.yml
+  - name: grafana-dashboard-provider
+    namespace: monitoring
+    files:
+      - grafana/provisioning/dashboards/dashboards.yml
+  - name: grafana-dashboards
+    namespace: monitoring
+    files:
+      - grafana/dashboards/heart-disease-api.json

@@ -152,3 +152,69 @@ def test_champion_alias_points_to_selected_run(run):
 
 def test_git_commit_helper_returns_text():
     assert isinstance(train.git_commit(), str) and train.git_commit()
+
+
+# ---------------------------------------------------------------- selection rule etc.
+
+def _results(**scores):
+    rows = [{"model": m, "cv_roc_auc_mean": s} for m, s in scores.items()]
+    return pd.DataFrame(rows).sort_values("cv_roc_auc_mean", ascending=False)
+
+
+def test_selection_rule_clear_winner():
+    from src.train import select_model
+    name, reason = select_model(_results(baseline_majority=0.5, logistic_regression=0.85,
+                                         random_forest=0.91, gradient_boosting=0.88))
+    assert name == "random_forest" and "highest" in reason
+
+
+def test_selection_rule_prefers_the_simplest_of_near_ties():
+    from src.train import select_model
+    name, reason = select_model(_results(logistic_regression=0.905, random_forest=0.910,
+                                         gradient_boosting=0.912))
+    assert name == "logistic_regression"
+    assert "simplest" in reason and "0.912" in reason
+
+
+def test_selection_rule_never_picks_the_baseline():
+    from src.train import select_model
+    name, _ = select_model(_results(baseline_majority=0.99, logistic_regression=0.6))
+    assert name == "logistic_regression"
+
+
+def test_clean_params():
+    from src.train import clean_params
+    assert clean_params({"model__C": 1, "features__add_hr_ratio": True}) == \
+        {"C": 1, "add_hr_ratio": True}
+
+
+def test_overfitting_gap_is_reported(run):
+    row = run["results"].set_index("model").loc["logistic_regression"]
+    assert row["cv_overfit_gap"] == pytest.approx(row["cv_train_roc_auc_mean"]
+                                                  - row["cv_roc_auc_mean"])
+    assert row["cv_train_roc_auc_mean"] >= row["cv_roc_auc_mean"] - 0.05
+
+
+def test_selection_reason_and_engineered_flag_are_recorded(run):
+    meta = json.loads(config.MODEL_METADATA_PATH.read_text())
+    assert "add_hr_ratio" in meta["best_params"] or meta["model_name"] != "logistic_regression"
+    assert meta["features"]["engineered"] in ([], config.ENGINEERED_FEATURES)
+    parent = mlflow.search_runs(filter_string="tags.stage = 'model_selection'").iloc[0]
+    assert parent["tags.selection_reason"]
+    assert parent["params.selection_tolerance"] == str(config.SELECTION_TOLERANCE)
+
+
+def test_feature_ablation_is_reported(run):
+    row = run["results"].set_index("model").loc["logistic_regression"]
+    assert 0.5 < row["cv_roc_auc_without_hr_ratio"] <= 1
+    assert 0.5 < row["cv_roc_auc_with_hr_ratio"] <= 1
+    # the selected setting is the better of the two
+    assert row["cv_roc_auc_mean"] == pytest.approx(
+        max(row["cv_roc_auc_without_hr_ratio"], row["cv_roc_auc_with_hr_ratio"]))
+    table = pd.read_csv(config.REPORTS_DIR / "feature_ablation.csv")
+    assert {"model", "feature_kept"} <= set(table.columns)
+
+
+def test_mlflow_model_bundles_only_the_code_it_needs(run):
+    code = config.MLFLOW_MODEL_DIR / "code" / "src"
+    assert sorted(p.name for p in code.glob("*.py")) == sorted(train.MODEL_CODE)

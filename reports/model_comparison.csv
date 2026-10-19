@@ -1,5 +1,5 @@
-model,cv_accuracy_mean,cv_accuracy_std,cv_precision_mean,cv_precision_std,cv_recall_mean,cv_recall_std,cv_f1_mean,cv_f1_std,cv_roc_auc_mean,cv_roc_auc_std,test_accuracy,test_precision,test_recall,test_f1,test_roc_auc
-logistic_regression,0.8511,0.025,0.8776,0.0606,0.7921,0.0482,0.8299,0.026,0.9113,0.018,0.8852,0.8387,0.9286,0.8814,0.961
-random_forest,0.8096,0.0369,0.8135,0.0501,0.7644,0.0894,0.7842,0.0474,0.8998,0.0322,0.8852,0.8387,0.9286,0.8814,0.9545
-gradient_boosting,0.8222,0.0288,0.8512,0.0715,0.7561,0.0696,0.7953,0.0316,0.8839,0.0267,0.9016,0.8667,0.9286,0.8966,0.96
-baseline_majority,0.5413,0.0065,0.0,0.0,0.0,0.0,0.0,0.0,0.5,0.0,0.541,0.0,0.0,0.0,0.5
+model,cv_accuracy_mean,cv_accuracy_std,cv_precision_mean,cv_precision_std,cv_recall_mean,cv_recall_std,cv_f1_mean,cv_f1_std,cv_roc_auc_mean,cv_roc_auc_std,cv_train_roc_auc_mean,cv_overfit_gap,test_accuracy,test_precision,test_recall,test_f1,test_roc_auc,cv_roc_auc_without_hr_ratio,cv_roc_auc_with_hr_ratio
+logistic_regression,0.8511,0.025,0.8776,0.0606,0.7921,0.0482,0.8299,0.026,0.9113,0.018,0.9258,0.0145,0.8852,0.8387,0.9286,0.8814,0.961,0.9113,0.909
+random_forest,0.8096,0.0369,0.8135,0.0501,0.7644,0.0894,0.7842,0.0474,0.8998,0.0322,0.9569,0.0572,0.8852,0.8387,0.9286,0.8814,0.9545,0.8998,0.8985
+gradient_boosting,0.8222,0.0288,0.8512,0.0715,0.7561,0.0696,0.7953,0.0316,0.8839,0.0267,0.9608,0.0769,0.9016,0.8667,0.9286,0.8966,0.96,0.8839,0.8835
+baseline_majority,0.5413,0.0065,0.0,0.0,0.0,0.0,0.0,0.0,0.5,0.0,0.5,0.0,0.541,0.0,0.0,0.0,0.5,,

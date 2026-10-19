@@ -72,13 +72,57 @@ SCORING = {
 # MLflow 3 stores sklearn models with skops (a safer format than pickle), which
 # only loads types that are explicitly trusted. We trust these two because the
 # models are created by this script, never downloaded from elsewhere.
-SKOPS_TRUSTED_TYPES = ["numpy.dtype", "sklearn.tree._tree.Tree"]
+SKOPS_TRUSTED_TYPES = ["numpy.dtype", "sklearn.tree._tree.Tree",
+                       "src.features.ClinicalFeatures",              # our own transformer
+                       "sklearn.compose._column_transformer.make_column_selector"]
 # Older MLflow 3.x releases pickle models and have no such argument.
 _SAVE_KWARGS = (
     {"skops_trusted_types": SKOPS_TRUSTED_TYPES}
     if "skops_trusted_types" in inspect.signature(mlflow.sklearn.save_model).parameters
     else {}
 )
+# The pipeline contains our own ClinicalFeatures class, so the MLflow model carries the
+# few modules it needs and loads anywhere (e.g. models:/heart-disease-classifier@champion).
+MODEL_CODE = ["__init__.py", "config.py", "features.py"]
+
+
+def model_code_dir() -> str:
+    """A minimal copy of the `src` package with only what the saved pipeline imports."""
+    target = Path(tempfile.mkdtemp(prefix="model_code_")) / "src"
+    target.mkdir()
+    for name in MODEL_CODE:
+        shutil.copy2(Path(__file__).parent / name, target / name)
+    return str(target)
+
+
+def clean_params(params: dict) -> dict:
+    """{'model__C': 1, 'features__add_hr_ratio': True} -> {'C': 1, 'add_hr_ratio': True}"""
+    return {k.split("__", 1)[-1]: v for k, v in params.items()}
+
+
+def select_model(results: pd.DataFrame) -> tuple[str, str]:
+    """Apply the selection rule fixed in config; return (model name, explanation).
+
+    1. Rank the real models by mean CV score (the test set is never used).
+    2. Every model within SELECTION_TOLERANCE of the best is considered equally good.
+    3. Among those, take the simplest one (config.SIMPLICITY_ORDER).
+    """
+    metric = f"cv_{config.SELECTION_METRIC}_mean"
+    real = results[results["model"] != "baseline_majority"]
+    best_score = real[metric].max()
+    tied = real[real[metric] >= best_score - config.SELECTION_TOLERANCE]["model"].tolist()
+    order = {name: i for i, name in enumerate(config.SIMPLICITY_ORDER)}
+    chosen = min(tied, key=lambda m: order.get(m, len(order)))
+    top = real.loc[real[metric].idxmax(), "model"]
+    if chosen == top and len(tied) == 1:
+        reason = f"{chosen} has the highest CV {config.SELECTION_METRIC} ({best_score:.4f})"
+    elif chosen == top:
+        reason = (f"{chosen} has the highest CV {config.SELECTION_METRIC} ({best_score:.4f}) "
+                  f"and is the simplest of {tied}")
+    else:
+        reason = (f"{tied} are within {config.SELECTION_TOLERANCE} of the best CV "
+                  f"{config.SELECTION_METRIC} ({best_score:.4f}); {chosen} is the simplest")
+    return chosen, reason
 
 
 def setup_mlflow(experiment_name: str) -> None:
@@ -94,6 +138,7 @@ def tune(name, estimator, grid, X_train, y_train) -> GridSearchCV:
     search = GridSearchCV(
         make_pipeline(estimator), param_grid=grid or [{}], cv=cv,
         scoring=SCORING, refit=config.SELECTION_METRIC, n_jobs=-1,
+        return_train_score=True,       # to measure over-fitting (train vs validation gap)
     )
     search.fit(X_train, y_train)
     log.info("%-20s best CV %s = %.4f", name, config.SELECTION_METRIC, search.best_score_)
@@ -107,6 +152,27 @@ def cv_summary(search: GridSearchCV) -> dict:
     for metric in METRICS:
         out[f"cv_{metric}_mean"] = float(search.cv_results_[f"mean_test_{metric}"][i])
         out[f"cv_{metric}_std"] = float(search.cv_results_[f"std_test_{metric}"][i])
+    sel = config.SELECTION_METRIC
+    out[f"cv_train_{sel}_mean"] = float(search.cv_results_[f"mean_train_{sel}"][i])
+    # How much better the model scores on the folds it was fitted on than on the
+    # held-out folds: a large gap means over-fitting.
+    out["cv_overfit_gap"] = out[f"cv_train_{sel}_mean"] - out[f"cv_{sel}_mean"]
+    return out
+
+
+def feature_ablation(search: GridSearchCV) -> dict:
+    """Best CV score with and without the engineered feature (other settings tuned freely).
+
+    Shows whether hr_pct_predicted actually helps this model - the evidence behind keeping
+    or dropping it, instead of assuming that a clinically sensible feature must help.
+    """
+    params = search.cv_results_["params"]
+    scores = search.cv_results_[f"mean_test_{config.SELECTION_METRIC}"]
+    out = {}
+    for flag, label in ((False, "without"), (True, "with")):
+        chosen = [s for p, s in zip(params, scores) if p.get("features__add_hr_ratio") is flag]
+        if chosen:
+            out[f"cv_{config.SELECTION_METRIC}_{label}_hr_ratio"] = float(max(chosen))
     return out
 
 
@@ -117,13 +183,13 @@ def log_candidate(name, search, X_train, X_test, y_test, tmp: Path) -> dict:
     y_proba = model.predict_proba(X_test)[:, 1]
     test = {f"test_{k}": float(v) for k, v in
             classification_metrics(y_test, y_pred, y_proba).items()}
-    cv = cv_summary(search)
+    cv = {**cv_summary(search), **feature_ablation(search)}
 
     with mlflow.start_run(run_name=name, nested=True) as run:
         mlflow.set_tag("model_family", name)
         mlflow.log_params({"model_type": type(model.named_steps["model"]).__name__,
                            "n_param_combinations": len(search.cv_results_["params"])})
-        mlflow.log_params({k.replace("model__", ""): v for k, v in search.best_params_.items()})
+        mlflow.log_params(clean_params(search.best_params_))
         mlflow.log_metrics({**cv, **test})
 
         cv_table = pd.DataFrame(search.cv_results_).sort_values("rank_test_roc_auc")
@@ -141,7 +207,7 @@ def log_candidate(name, search, X_train, X_test, y_test, tmp: Path) -> dict:
         signature = infer_signature(X_train, model.predict_proba(X_train)[:, 1])
         info = mlflow.sklearn.log_model(
             model, name="model", signature=signature, input_example=X_train.head(3),
-            **_SAVE_KWARGS,
+            code_paths=[model_code_dir()], **_SAVE_KWARGS,
         )
         run_id = run.info.run_id
 
@@ -176,17 +242,21 @@ def save_final_model(name, model, row, data_hash, tmp_plots: dict, X_sample=None
 
     if config.MLFLOW_MODEL_DIR.exists():
         shutil.rmtree(config.MLFLOW_MODEL_DIR)
-    mlflow.sklearn.save_model(model, config.MLFLOW_MODEL_DIR, **_SAVE_KWARGS)
+    mlflow.sklearn.save_model(model, config.MLFLOW_MODEL_DIR,
+                              code_paths=[model_code_dir()], **_SAVE_KWARGS)
 
     metadata = {
         "model_name": name,
         "model_class": type(model.named_steps["model"]).__name__,
-        "best_params": {k.replace("model__", ""): v for k, v in row["best_params"].items()},
+        "best_params": clean_params(row["best_params"]),
         "selection_metric": f"cv_{config.SELECTION_METRIC}_mean",
         "cv_metrics": {k: round(v, 4) for k, v in row.items() if k.startswith("cv_")},
         "test_metrics": {k: round(v, 4) for k, v in row.items() if k.startswith("test_")},
         "features": {"numeric": config.NUMERIC_FEATURES,
-                     "categorical": config.CATEGORICAL_FEATURES},
+                     "categorical": config.CATEGORICAL_FEATURES,
+                     "engineered": (config.ENGINEERED_FEATURES
+                                    if row["best_params"].get("features__add_hr_ratio")
+                                    else [])},
         "target": "1 = heart disease present (num > 0), 0 = absent",
         "mlflow_run_id": row["run_id"],
         "training_data_sha256": data_hash,
@@ -242,10 +312,9 @@ def main(quick: bool = False, do_register: bool = True,
 
         results = pd.DataFrame(rows).sort_values(
             f"cv_{config.SELECTION_METRIC}_mean", ascending=False)
-        real = results[results["model"] != "baseline_majority"]
-        best = real.iloc[0]
-        best_name = best["model"]
-        log.info("Selected model: %s", best_name)
+        best_name, reason = select_model(results)
+        best = results[results["model"] == best_name].iloc[0]
+        log.info("Selected model: %s - %s", best_name, reason)
 
         # Comparison artifacts on the parent run (and copies for the report).
         config.FIGURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -253,6 +322,13 @@ def main(quick: bool = False, do_register: bool = True,
         table = results[cols].round(4)
         table_path = config.REPORTS_DIR / "model_comparison.csv"
         table.to_csv(table_path, index=False)
+        ablation_cols = [c for c in results.columns if c.endswith("_hr_ratio")]
+        ablation = results[results["model"] != "baseline_majority"][["model"] + ablation_cols]
+        ablation = ablation.assign(feature_kept=[
+            bool(clean_params(p).get("add_hr_ratio")) for p in
+            results[results["model"] != "baseline_majority"]["best_params"]]).round(4)
+        ablation_path = config.REPORTS_DIR / "feature_ablation.csv"
+        ablation.to_csv(ablation_path, index=False)
         roc_path = plot_roc_curves(
             {k: v for k, v in fitted.items() if k != "baseline_majority"},
             X_test, y_test, config.FIGURES_DIR / "roc_curves.png")
@@ -261,11 +337,13 @@ def main(quick: bool = False, do_register: bool = True,
                                         config.FIGURES_DIR / "confusion_matrix_best.png")
         imp_path = plot_feature_importance(fitted[best_name], f"Selected: {best_name}",
                                            config.FIGURES_DIR / "feature_importance_best.png")
-        for p in (table_path, roc_path, cm_path, imp_path):
+        for p in (table_path, ablation_path, roc_path, cm_path, imp_path):
             if p:
                 mlflow.log_artifact(p, "comparison")
 
-        mlflow.set_tag("selected_model", best_name)
+        mlflow.set_tags({"selected_model": best_name, "selection_reason": reason})
+        mlflow.log_params({"selection_tolerance": config.SELECTION_TOLERANCE,
+                           "simplicity_order": ",".join(config.SIMPLICITY_ORDER)})
         mlflow.log_metrics({
             "best_cv_roc_auc": best[f"cv_{config.SELECTION_METRIC}_mean"],
             "best_test_roc_auc": best["test_roc_auc"],
@@ -281,7 +359,10 @@ def main(quick: bool = False, do_register: bool = True,
 
     print("\nModel comparison (sorted by CV ROC-AUC):")
     print(table.to_string(index=False))
-    return {"results": results, "fitted": fitted, "best_name": best_name,
+    print("\nEngineered feature hr_pct_predicted - best CV ROC-AUC without / with it:")
+    print(ablation.to_string(index=False))
+    print(f"\nSelected: {best_name} - {reason}")
+    return {"results": results, "fitted": fitted, "best_name": best_name, "reason": reason,
             "split": (X_train, X_test, y_train, y_test)}
 
 

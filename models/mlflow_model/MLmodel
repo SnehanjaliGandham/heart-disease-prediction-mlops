@@ -1,5 +1,6 @@
 flavors:
   python_function:
+    code: code
     env:
       conda: conda.yaml
       virtualenv: python_env.yaml
@@ -8,16 +9,18 @@ flavors:
     predict_fn: predict
     python_version: 3.13.5
   sklearn:
-    code: null
+    code: code
     pickled_model: model.skops
     serialization_format: skops
     sklearn_version: 1.9.1
     skops_trusted_types:
     - numpy.dtype
     - sklearn.tree._tree.Tree
+    - src.features.ClinicalFeatures
+    - sklearn.compose._column_transformer.make_column_selector
 mlflow_version: 3.17.1
 model_id: null
-model_size_bytes: 198425
-model_uuid: 0b25c9f0bd424b6dbccb0b273b077178
+model_size_bytes: 207378
+model_uuid: 0b739a097f1e4e79b3af1f02e0e08939
 prompts: null
-utc_time_created: '2026-10-18 11:43:30.666358'
+utc_time_created: '2026-10-19 10:46:27.780384'

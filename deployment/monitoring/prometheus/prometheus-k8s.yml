@@ -1,0 +1,43 @@
+# Prometheus configuration for Kubernetes (deployment/monitoring).
+# Finds every API pod by itself through the Kubernetes API, using the
+# prometheus.io/* annotations in deployment/k8s/deployment.yaml - so new pods
+# created by the autoscaler or a rolling update are scraped automatically.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: docker-desktop
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: heart-disease-api
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [heart-disease]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_ready]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

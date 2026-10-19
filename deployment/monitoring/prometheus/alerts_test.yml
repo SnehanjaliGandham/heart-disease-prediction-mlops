@@ -1,0 +1,113 @@
+# Unit tests for alerts.yml:  promtool test rules deployment/monitoring/prometheus/alerts_test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # 1. A pod stops answering -> HeartApiDown after 1 minute.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="heart-disease-api", pod="api-a"}'
+        values: "1 1 1 0 0 0 0 0 0 0"
+      - series: 'up{job="heart-disease-api", pod="api-b"}'
+        values: "1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: HeartApiDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HeartApiDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: heart-disease-api, pod: api-a}
+            exp_annotations:
+              summary: "API pod api-a is not responding to Prometheus"
+              description: "The /metrics endpoint of api-a has failed for 1 minute."
+
+  # 2. No API metrics at all -> HeartApiNoTargets.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="prometheus"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HeartApiNoTargets
+        exp_alerts:
+          - exp_labels: {severity: critical, job: heart-disease-api}
+            exp_annotations:
+              summary: "No prediction API pods are being monitored"
+              description: "Prometheus has found no API pod to scrape for 2 minutes - is the deployment running?"
+
+  # 3. 10 % of requests return 500 -> HeartApiHighErrorRate; healthy traffic -> nothing.
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="heart-disease-api", route="/predict", method="POST", status="200"}'
+        values: "0+90x15"
+      - series: 'http_requests_total{job="heart-disease-api", route="/predict", method="POST", status="500"}'
+        values: "0+10x15"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HeartApiHighErrorRate
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: HeartApiHighErrorRate
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "More than 5 % of API requests fail with a server error"
+              description: "Server error ratio is 10% over the last 5 minutes."
+
+  # 4. Patients become ~15 years older than in training (std 9) -> drift on age only.
+  #    Training mean age 54.5, std 9 -> live mean 69.5 = 1.67 std away. Cholesterol stays normal.
+  - interval: 1m
+    input_series:
+      - series: 'model_training_feature_mean{job="heart-disease-api", pod="api-a", feature="age"}'
+        values: "54.5x40"
+      - series: 'model_training_feature_std{job="heart-disease-api", pod="api-a", feature="age"}'
+        values: "9x40"
+      - series: 'input_feature_value_count{job="heart-disease-api", pod="api-a", feature="age"}'
+        values: "0+20x40"
+      - series: 'input_feature_value_sum{job="heart-disease-api", pod="api-a", feature="age"}'
+        values: "0+1390x40"
+      - series: 'model_training_feature_mean{job="heart-disease-api", pod="api-a", feature="chol"}'
+        values: "250x40"
+      - series: 'model_training_feature_std{job="heart-disease-api", pod="api-a", feature="chol"}'
+        values: "52x40"
+      - series: 'input_feature_value_count{job="heart-disease-api", pod="api-a", feature="chol"}'
+        values: "0+20x40"
+      - series: 'input_feature_value_sum{job="heart-disease-api", pod="api-a", feature="chol"}'
+        values: "0+5000x40"
+    promql_expr_test:
+      - expr: round(feature:drift_score:15m, 0.01)
+        eval_time: 20m
+        exp_samples:
+          - labels: '{feature="age"}'
+            value: 1.67
+          - labels: '{feature="chol"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HeartApiInputDrift
+        exp_alerts:
+          - exp_labels: {severity: warning, feature: age}
+            exp_annotations:
+              summary: "Input drift on 'age'"
+              description: >-
+                The mean of 'age' in recent requests is 1.67
+                training standard deviations away from the training data. The model may need retraining.
+
+  # 5. Almost every prediction is "Heart disease" -> HeartApiPredictionShift.
+  - interval: 1m
+    input_series:
+      - series: 'predictions_total{job="heart-disease-api", pod="api-a", label="Heart disease"}'
+        values: "0+19x40"
+      - series: 'predictions_total{job="heart-disease-api", pod="api-a", label="No heart disease"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HeartApiPredictionShift
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Share of 'Heart disease' predictions is unusual"
+              description: "95% of recent predictions are positive (training data: about 46 %)."
