@@ -18,6 +18,7 @@ step "3/7 Validate and clean";       $PY -m src.data
 step "4/7 Train, tune, track";       $PY -m src.train $QUICK
 step "5/7 Quality gate";             $PY scripts/quality_gate.py
 step "6/7 Sample prediction";        $PY -m src.predict
-step "7/7 Lint and tests";           ruff check . && $PY -m pytest -q
+# (two separate commands: with `set -e`, a failure on the left of `&&` would not stop the script)
+step "7/7 Lint and tests";           ruff check .; $PY -m pytest -q
 
 printf '\nPipeline finished. Browse runs with:  mlflow ui --backend-store-uri sqlite:///mlflow.db\n'

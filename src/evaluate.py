@@ -1,11 +1,15 @@
 """Metrics and evaluation plots shared by the training script and notebook 02."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")  # headless: works in CI and Docker
+# Headless backend for scripts, CI and Docker - but not inside Jupyter, where it would
+# stop notebook 02 from showing its charts inline.
+if "ipykernel" not in sys.modules:
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
