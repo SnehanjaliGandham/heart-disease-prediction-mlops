@@ -11,6 +11,7 @@ Every screenshot is a real capture of a real run, mapped to the assignment task 
 | `task1_02_data_download.png` | 1 | `python scripts/download_data.py`: dataset verified against the SHA-256 manifest | PG |
 | `task1_03_data_cleaning.png` | 1 | `python -m src.data`: missing values, class balance, clean file saved | PG |
 | `task1_04_eda_notebook.png` | 1 | `01_data_acquisition_eda.ipynb` executed: feature distributions by class | PG |
+| `task1_04b_eda_distributions.png` | 1 | EDA notebook in Prayogshala: numeric feature distributions by class | PG |
 | `task1_05_eda_heatmap.png` | 1 | Correlation heatmap and class balance from the EDA notebook | PG |
 | `task2_01_engineered_feature.png` | 2 | Notebook 02, section 2b: `hr_pct_predicted` by diagnosis + correlations | PG |
 | `task2_02_training_run.png` | 2 | `python -m src.train`: model comparison, feature ablation, selection reason | PG |
@@ -27,6 +28,8 @@ Every screenshot is a real capture of a real run, mapped to the assignment task 
 | `task3_08_registry.png` | 3 | MLflow model registry: `heart-disease-classifier` with alias `@champion` | Laptop |
 | `task3_09_artifacts.png` | 3 | MLflow: comparison artifacts on the parent run | Laptop |
 | `task3_10_prayogshala_mlflow.png` | 3 | MLflow UI running in Prayogshala with the new runs | PG |
+| `task3_10a_prayogshala_mlflow_lineage.png` | 3 | MLflow in Prayogshala: 15 runs with source (script / notebook) and dataset digest | PG |
+| `task3_11_prayogshala_registry.png` | 3 | MLflow model registry in Prayogshala: versions 1-3, @champion on the newest | PG |
 | `task4_01_quality_gate.png` | 4 | `python scripts/quality_gate.py`: every threshold PASS | PG |
 | `task4_02_predict_cli.png` | 4 | `python -m src.predict` + `models/` folder (joblib, MLflow format, metadata) | PG |
 | `task4_03_run_pipeline.png` | 4 | `bash scripts/run_pipeline.sh` finished: reproducible end-to-end run | PG |

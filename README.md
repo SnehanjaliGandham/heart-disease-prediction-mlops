@@ -43,12 +43,13 @@ Snehanjali Gandham · 2025AE05303
 ## Contents
 
 1. [Quick start](#quick-start)
-2. [Assignment tasks → where to find them](#assignment-tasks--where-to-find-them)
-3. [Results](#results)
-4. [How it works](#how-it-works) — data · models · MLflow · packaging · CI/CD · API · Kubernetes · monitoring
-5. [Reproducibility & BITS Prayogshala](#reproducibility--bits-prayogshala)
-6. [Project structure](#project-structure)
-7. [Demo video](#demo-video)
+2. [API access (local testing)](#api-access-local-testing)
+3. [Assignment tasks → where to find them](#assignment-tasks--where-to-find-them)
+4. [Results](#results)
+5. [How it works](#how-it-works) — data · models · MLflow · packaging · CI/CD · API · Kubernetes · monitoring
+6. [Reproducibility & BITS Prayogshala](#reproducibility--bits-prayogshala)
+7. [Project structure](#project-structure)
+8. [Demo video](#demo-video)
 
 ---
 
@@ -75,6 +76,48 @@ That single command runs **environment check → data download & checksum → cl
 | Deploy to Kubernetes | `kubectl apply -k deployment/metrics-server` · `kubectl apply -k deployment/k8s` → http://localhost:8080 |
 | Monitoring on Kubernetes | `kubectl apply -k deployment/monitoring` → Prometheus :9090 · Grafana :3000 |
 | Verify any deployment | `python scripts/smoke_test.py --url http://localhost:8080` (8 checks) |
+
+---
+
+## API access (local testing)
+
+> The assignment allows a public cloud **or** local Kubernetes. The API is deployed on **local Kubernetes (Docker Desktop)**, so there is no public URL — these are the access instructions for local testing.
+
+**Option A — Kubernetes (as deployed and evaluated in the report, Section 9):**
+
+```bash
+docker build -t heart-disease-api:1.0.0 .                     # image used by the cluster
+kubectl apply -k deployment/metrics-server                     # needed by the autoscaler
+kubectl apply -k deployment/k8s                                # deployment, LoadBalancer service, HPA, PDB, ConfigMap
+kubectl -n heart-disease rollout status deployment/heart-disease-api
+python scripts/smoke_test.py --url http://localhost:8080       # 8 end-to-end checks
+```
+
+**Option B — Docker only (no Kubernetes needed):**
+
+```bash
+docker build -t heart-disease-api:1.0.0 .
+docker run -d -p 8000:8000 --name heart-api heart-disease-api:1.0.0
+python scripts/smoke_test.py --url http://localhost:8000
+```
+
+**Send a prediction** (use port 8080 for Kubernetes, 8000 for Docker):
+
+```bash
+curl -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d @samples/high_risk.json
+# PowerShell:
+# Invoke-RestMethod http://localhost:8080/predict -Method Post -ContentType application/json -InFile samples/high_risk.json
+```
+
+| URL | What it is |
+|---|---|
+| http://localhost:8080/docs | Swagger UI — try `/predict` interactively |
+| http://localhost:8080/model-info | which model is served, its parameters and test metrics |
+| http://localhost:8080/health · /ready | liveness · readiness |
+| http://localhost:8080/metrics | Prometheus metrics |
+| http://localhost:3000 · http://localhost:9090 | Grafana · Prometheus, after `kubectl apply -k deployment/monitoring` |
+
+Example response: `{"prediction": 1, "label": "Heart disease", "probability_disease": 0.9787, "confidence": 0.9787, "model_version": "logistic_regression-c19ff10", "request_id": "..."}`
 
 ---
 
