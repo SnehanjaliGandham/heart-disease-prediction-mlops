@@ -31,9 +31,9 @@ Snehanjali Gandham · 2025AE05303
 |---|---|
 | 🎯 **Model** | Logistic Regression — **CV ROC-AUC 0.911 ± 0.018**, test ROC-AUC **0.961**, recall **0.929** (26 / 28 disease cases found) |
 | 🔁 **Reproducible** | identical scores to 4 decimals on a Windows laptop, GitHub CI and the **BITS Prayogshala** lab |
-| ✅ **Tested** | **199** tests · **99 %** coverage · Python 3.10–3.13 · a failing change is blocked by CI |
+| ✅ **Tested** | **199** tests · **99 %** coverage with the locked versions · run on Python 3.10–3.13 (on 3.10, 3 model-loading tests are skipped by design: 196 passed, 98.7 %) · a failing change is blocked by CI |
 | 🚀 **Delivered** | 5-job GitHub Actions pipeline: lint → test → train + quality gate → Docker → Kubernetes |
-| ☸️ **Resilient** | 22,880 requests, **0 errors** while autoscaling 2 → 5 pods · 4,002 requests, **0 errors** during a rolling update · self-healing · rollback |
+| ☸️ **Resilient** | 22,880-request load test with **0 server / 0 connection errors** while autoscaling 2 → 5 pods · rolling update under load with **0 server / 0 connection errors** · self-healing · rollback (load tests deliberately include ~5 % invalid inputs, answered with HTTP 422) |
 | 📈 **Observed** | Prometheus + Grafana, 7 alert rules, **data-drift detection** (age drift +1.67 σ caught within 5 min) |
 
 <p align="center"><img src="docs/architecture.png" width="900" alt="Architecture: data, training and tracking; CI/CD on every push; serving and monitoring on Kubernetes"></p>
@@ -48,12 +48,26 @@ Snehanjali Gandham · 2025AE05303
 4. [Results](#results)
 5. [How it works](#how-it-works) — data · models · MLflow · packaging · CI/CD · API · Kubernetes · monitoring
 6. [Reproducibility & BITS Prayogshala](#reproducibility--bits-prayogshala)
-7. [Project structure](#project-structure)
-8. [Demo video](#demo-video)
+7. [Working on this project](#working-on-this-project)
+8. [Troubleshooting](#troubleshooting)
+9. [Project structure](#project-structure)
+10. [Demo video](#demo-video)
 
 ---
 
 ## Quick start
+
+**Prerequisites**
+
+| Tool | Needed for | Version used |
+|---|---|---|
+| Git | cloning the repository | any recent |
+| Python | pipeline, tests, notebooks | 3.9 – 3.13 (3.12 / 3.13 recommended) |
+| Docker Desktop (or Docker Engine on Linux) | container, `docker compose` | 4.95 |
+| Kubernetes — enable it in Docker Desktop *Settings → Kubernetes*, or use Minikube | Kubernetes deployment | v1.36 (Docker Desktop) |
+| `kubectl` (installed with Docker Desktop) | applying the manifests | matching the cluster |
+
+Only Git and Python are required for the ML pipeline; Docker and Kubernetes are needed only for serving and deployment.
 
 > Works on **Python 3.9 – 3.13** on Linux (incl. BITS Prayogshala), Windows and macOS. Create a fresh virtual environment on each machine.
 
@@ -76,6 +90,14 @@ That single command runs **environment check → data download & checksum → cl
 | Deploy to Kubernetes | `kubectl apply -k deployment/metrics-server` · `kubectl apply -k deployment/k8s` → http://localhost:8080 |
 | Monitoring on Kubernetes | `kubectl apply -k deployment/monitoring` → Prometheus :9090 · Grafana :3000 |
 | Verify any deployment | `python scripts/smoke_test.py --url http://localhost:8080` (8 checks) |
+
+**Tests and linting** (the same checks CI runs):
+
+```bash
+ruff check .                         # lint — must report "All checks passed!"
+python -m pytest -q --cov            # 199 tests with coverage (offline, about 1 minute)
+python scripts/quality_gate.py       # trained model must meet the minimum metrics
+```
 
 ---
 
@@ -117,7 +139,7 @@ curl -X POST http://localhost:8080/predict -H "Content-Type: application/json" -
 | http://localhost:8080/metrics | Prometheus metrics |
 | http://localhost:3000 · http://localhost:9090 | Grafana · Prometheus, after `kubectl apply -k deployment/monitoring` |
 
-Example response: `{"prediction": 1, "label": "Heart disease", "probability_disease": 0.9787, "confidence": 0.9787, "model_version": "logistic_regression-c19ff10", "request_id": "..."}`
+Example response: `{"prediction": 1, "label": "Heart disease", "probability_disease": 0.9787, "confidence": 0.9787, "model_version": "logistic_regression-c19ff10", "request_id": "..."}` — `confidence` is the probability of the *predicted* class, i.e. max(p, 1 − p); for a "No heart disease" prediction with p = 0.0841 it is 0.9159.
 
 ---
 
@@ -231,8 +253,8 @@ Clinical-range and UCI-code validation (HTTP 422 per field, never a stack trace)
 
 | Demonstrated | Result |
 |---|---|
-| Load: 16 clients × 3 min | CPU 5 % → 791 %, **2 → 5 → 2 pods**, 22,880 requests, **0 errors**, p95 300 ms |
-| Rolling update under load | 4,002 requests, **0 errors** |
+| Load: 16 clients × 3 min | CPU 5 % → 791 %, **2 → 5 → 2 pods**; 22,880 requests = 21,625 HTTP 200 + 1,255 HTTP 422 (deliberately invalid 5 %), **0 server / 0 connection errors**, p95 300 ms |
+| Rolling update under load | 4,002 requests = 3,779 HTTP 200 + 223 deliberate HTTP 422, **0 server / 0 connection errors** |
 | Delete a pod | replaced in seconds, no failed requests |
 | Broken release → `kubectl rollout undo` | old pods kept serving; previous version restored |
 
@@ -278,6 +300,45 @@ The full model pipeline was re-run from a fresh clone on the **BITS Prayogshala*
 ```bash
 python3 scripts/check_env.py      # checks Python, packages, network, docker, kubectl on a new machine
 ```
+
+---
+
+## Working on this project
+
+How to pull the latest version, make a change and get it merged safely:
+
+```bash
+git pull origin main                                  # 1. start from the latest main
+git checkout -b feature/my-change                     # 2. work on a branch, never directly on main
+#    ... edit code / notebooks ...
+ruff check . && python -m pytest -q                   # 3. lint and test locally
+python -m src.train && python scripts/quality_gate.py # 4. only if data, features or models changed
+git add -A && git commit -m "Describe the change"
+git push -u origin feature/my-change                  # 5. open a pull request on GitHub
+```
+
+* **CI must be green before merging.** The pull request runs all five jobs; a failing lint, test, quality gate, Docker smoke test or Kubernetes check blocks the merge (demonstrated with pull request #1).
+* **Retraining changes the committed model** in `models/` (joblib, MLflow format and `model_metadata.json`). Commit these together with the code that produced them, so the served model and the code always match.
+* **Dependencies:** add new packages to `requirements.txt` (ranges); if you upgrade versions, regenerate `requirements-lock.txt` with `pip freeze > requirements-lock.txt` and re-run the tests. The committed model only loads with the scikit-learn version recorded in `model_metadata.json`.
+* **After changing the API or manifests:** rebuild the image (`docker build -t heart-disease-api:1.0.0 .`), then `kubectl -n heart-disease rollout restart deployment/heart-disease-api` and re-run `scripts/smoke_test.py`.
+* **Screenshots / evidence:** add new files to `screenshots/` and register them in `screenshots/README.md`; `python scripts/check_evidence.py` lists anything missing.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| PowerShell refuses to run `.venv\Scripts\activate` or `run_pipeline.ps1` | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then run it again (affects this window only) |
+| `python` not found on Linux | use `python3` (e.g. `python3 -m venv .venv`) |
+| Warning that the model was trained with a different scikit-learn version | install the exact versions: `pip install -r requirements-lock.txt` (Python ≥ 3.12), or retrain with `python -m src.train` |
+| `kubectl: command not found` | enable Kubernetes in Docker Desktop (*Settings → Kubernetes*), or install Minikube; the ML pipeline itself does not need it |
+| Pods stuck in `ErrImagePull` / `ImagePullBackOff` | build the image locally first (`docker build -t heart-disease-api:1.0.0 .`); on Minikube also run `minikube image load heart-disease-api:1.0.0` |
+| `localhost:8080` not reachable on Minikube | run `minikube tunnel` in a separate terminal so the LoadBalancer gets an address |
+| HPA shows `<unknown>` CPU | `kubectl apply -k deployment/metrics-server` and wait about a minute |
+| All `localhost` ports hang on Windows although pods are healthy | WSL can hold the port: `wsl --shutdown`, restart Docker Desktop, re-apply the manifests |
+| `address already in use` when starting the API or MLflow | another process uses the port; pick another, e.g. `uvicorn src.api.main:app --port 8001` or `mlflow ui --port 5001` |
+| MLflow UI shows no runs | run it from the project folder (it reads `mlflow.db` there), or train first with `python -m src.train` |
 
 ---
 
