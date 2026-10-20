@@ -25,3 +25,6 @@ logs/
 *_bkp.ipynb
 .DS_Store
 _to_delete/
+
+# demo video (uploaded to Google Drive, too large for GitHub)
+Demo/
